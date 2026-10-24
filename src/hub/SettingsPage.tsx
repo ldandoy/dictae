@@ -213,6 +213,18 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
 
         <div className="card" style={{ display: "grid", gap: 12 }}>
           <strong>Raccourci et collage</strong>
+          <div className="field check">
+            <input
+              id="context"
+              type="checkbox"
+              checked={s.contextEnabled}
+              onChange={(e) => set("contextEnabled", e.target.checked)}
+            />
+            <label htmlFor="context">
+              Lire le contexte de saisie (application, texte autour du curseur) pour la mise en forme, ajuster les
+              espaces et vérifier le collage
+            </label>
+          </div>
           <div className="field">
             <label>Raccourci push-to-talk</label>
             <input type="text" value={s.shortcut} onChange={(e) => set("shortcut", e.target.value)} />

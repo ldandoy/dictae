@@ -27,6 +27,7 @@ export interface Settings {
   ollamaBaseUrl: string;
   ollamaModel: string;
   formatInstructions: string;
+  contextEnabled: boolean;
   shortcut: string;
   restoreClipboard: boolean;
   pasteDelayMs: number;
@@ -62,6 +63,9 @@ export interface HistoryEntry {
   latencyMs: number;
   model: string;
   error: string | null;
+  app: string | null;
+  windowTitle: string | null;
+  url: string | null;
 }
 
 export const api = {

@@ -7,11 +7,15 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::context::InsertionContext;
+
 #[derive(Debug, Clone)]
 pub struct FormatConfig {
     pub base_url: String,
     pub model: String,
     pub instructions: String,
+    /// Contexte d'insertion (application, texte autour du curseur), s'il a pu être lu.
+    pub context: Option<InsertionContext>,
 }
 
 #[derive(Debug)]
@@ -27,13 +31,64 @@ et en supprimant les hésitations (euh, hum, bah) et les mots répétés par err
 Ne reformule pas, ne résume pas, n'ajoute rien, ne traduis pas, ne commente pas, ne mets pas de guillemets autour du texte. \
 Réponds uniquement avec le texte corrigé.";
 
-fn system_prompt(instructions: &str) -> String {
-    let extra = instructions.trim();
-    if extra.is_empty() {
-        SYSTEM_PROMPT.to_string()
-    } else {
-        format!("{SYSTEM_PROMPT}\n\nConsignes supplémentaires de l'utilisateur : {extra}")
+fn tail(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let start = chars.len().saturating_sub(max);
+    chars[start..].iter().collect()
+}
+
+fn head(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
+/// Décrit l'endroit où le texte sera inséré, pour adapter majuscule initiale,
+/// ponctuation finale et registre.
+fn context_block(ctx: &InsertionContext) -> String {
+    let mut lines = Vec::new();
+    let mut place = format!("Le texte sera inséré dans l'application « {} »", ctx.app);
+    if !ctx.window_title.trim().is_empty() {
+        place.push_str(&format!(" (fenêtre : « {} »)", head(ctx.window_title.trim(), 120)));
     }
+    if let Some(url) = &ctx.url {
+        place.push_str(&format!(", page {}", head(url, 160)));
+    }
+    place.push('.');
+    lines.push(place);
+
+    let before = ctx.before.trim_end_matches(' ');
+    if ctx.caret_known && !before.trim().is_empty() {
+        lines.push(format!("Texte déjà présent juste avant le point d'insertion : « {} »", tail(before, 300)));
+    }
+    if ctx.caret_known && !ctx.after.trim().is_empty() {
+        lines.push(format!("Texte juste après : « {} »", head(ctx.after.trim_start(), 100)));
+    }
+    if !ctx.selected.trim().is_empty() {
+        lines.push("Le texte dicté remplace une sélection.".to_string());
+    }
+    lines.push(
+        "Adapte seulement la majuscule initiale et la ponctuation finale à ce contexte (pas de majuscule ni de point \
+         final si la phrase précédente est inachevée) et le registre (message instantané court, e-mail, document). \
+         Ne recopie jamais ce contexte : réponds uniquement avec le texte dicté corrigé."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+fn system_prompt_with(instructions: &str, context: Option<&InsertionContext>) -> String {
+    let mut prompt = SYSTEM_PROMPT.to_string();
+    if let Some(ctx) = context {
+        prompt.push_str("\n\nContexte :\n");
+        prompt.push_str(&context_block(ctx));
+    }
+    let extra = instructions.trim();
+    if !extra.is_empty() {
+        prompt.push_str(&format!("\n\nConsignes supplémentaires de l'utilisateur : {extra}"));
+    }
+    prompt
+}
+
+fn system_prompt(instructions: &str) -> String {
+    system_prompt_with(instructions, None)
 }
 
 /// Nettoie la réponse du modèle : balises de raisonnement, guillemets englobants, espaces.
@@ -86,7 +141,7 @@ pub async fn format_text(client: &reqwest::Client, cfg: &FormatConfig, raw: &str
         "keep_alive": "30m",
         "options": { "temperature": 0, "num_predict": raw.chars().count() * 2 + 64 },
         "messages": [
-            { "role": "system", "content": system_prompt(&cfg.instructions) },
+            { "role": "system", "content": system_prompt_with(&cfg.instructions, cfg.context.as_ref()) },
             { "role": "user", "content": raw }
         ]
     });
@@ -171,5 +226,24 @@ mod tests {
     fn system_prompt_includes_user_instructions() {
         assert!(!system_prompt("  ").contains("Consignes supplémentaires"));
         assert!(system_prompt("tutoie").contains("Consignes supplémentaires de l'utilisateur : tutoie"));
+    }
+
+    #[test]
+    fn system_prompt_describes_insertion_context() {
+        let ctx = InsertionContext {
+            app: "Slack".into(),
+            window_title: "général - Overconsulting".into(),
+            before: "Salut, je voulais te dire que".into(),
+            after: "".into(),
+            caret_known: true,
+            readable: true,
+            ..Default::default()
+        };
+        let p = system_prompt_with("", Some(&ctx));
+        assert!(p.contains("« Slack »"), "{p}");
+        assert!(p.contains("juste avant le point d'insertion : « Salut, je voulais te dire que »"), "{p}");
+        assert!(!p.contains("Texte juste après"), "{p}");
+        let none = system_prompt_with("", Some(&InsertionContext { app: "Bloc-notes".into(), ..Default::default() }));
+        assert!(none.contains("Bloc-notes") && !none.contains("point d'insertion"));
     }
 }

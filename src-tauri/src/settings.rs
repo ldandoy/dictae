@@ -34,6 +34,9 @@ pub struct Settings {
     pub ollama_model: String,
     /// Consignes supplémentaires ajoutées au prompt de mise en forme.
     pub format_instructions: String,
+    /// Lire le contexte de saisie (application, texte autour du curseur) par UI Automation,
+    /// l'utiliser pour la mise en forme et vérifier le collage.
+    pub context_enabled: bool,
 
     /// Raccourci global push-to-talk, format `Ctrl+Shift+Space`.
     pub shortcut: String,
@@ -61,6 +64,7 @@ impl Default for Settings {
             ollama_base_url: "http://127.0.0.1:11434".into(),
             ollama_model: "qwen3.5:4b".into(),
             format_instructions: String::new(),
+            context_enabled: true,
             shortcut: "Ctrl+Shift+Space".into(),
             restore_clipboard: true,
             paste_delay_ms: 60,

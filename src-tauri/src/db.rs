@@ -24,6 +24,10 @@ pub struct HistoryEntry {
     pub latency_ms: i64,
     pub model: String,
     pub error: Option<String>,
+    /// Application cible, titre de fenêtre et URL (navigateur) au moment de la dictée.
+    pub app: Option<String>,
+    pub window_title: Option<String>,
+    pub url: Option<String>,
 }
 
 pub struct Db {
@@ -49,7 +53,10 @@ impl Db {
                  duration_ms    INTEGER NOT NULL DEFAULT 0,
                  latency_ms     INTEGER NOT NULL DEFAULT 0,
                  model          TEXT NOT NULL DEFAULT '',
-                 error          TEXT
+                 error          TEXT,
+                 app            TEXT,
+                 window_title   TEXT,
+                 url            TEXT
              );
              CREATE INDEX IF NOT EXISTS history_created_at ON history(created_at DESC);",
         )
@@ -62,8 +69,8 @@ impl Db {
 
     pub fn insert(&self, e: &HistoryEntry) -> Result<()> {
         self.conn.lock().execute(
-            "INSERT INTO history (id, created_at, asr_text, formatted_text, pasted_text, status, duration_ms, latency_ms, model, error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO history (id, created_at, asr_text, formatted_text, pasted_text, status, duration_ms, latency_ms, model, error, app, window_title, url)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 e.id,
                 e.created_at,
@@ -74,7 +81,10 @@ impl Db {
                 e.duration_ms,
                 e.latency_ms,
                 e.model,
-                e.error
+                e.error,
+                e.app,
+                e.window_title,
+                e.url
             ],
         )?;
         Ok(())
@@ -83,7 +93,7 @@ impl Db {
     pub fn list(&self, limit: u32) -> Result<Vec<HistoryEntry>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, created_at, asr_text, formatted_text, pasted_text, status, duration_ms, latency_ms, model, error
+            "SELECT id, created_at, asr_text, formatted_text, pasted_text, status, duration_ms, latency_ms, model, error, app, window_title, url
              FROM history ORDER BY created_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |r| {
@@ -98,6 +108,9 @@ impl Db {
                 latency_ms: r.get(7)?,
                 model: r.get(8)?,
                 error: r.get(9)?,
+                app: r.get(10)?,
+                window_title: r.get(11)?,
+                url: r.get(12)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -122,9 +135,11 @@ fn migrate(conn: &Connection) -> Result<()> {
     let columns: Vec<String> = stmt
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<std::result::Result<_, _>>()?;
-    if !columns.iter().any(|c| c == "formatted_text") {
-        conn.execute("ALTER TABLE history ADD COLUMN formatted_text TEXT", [])
-            .context("migration : colonne formatted_text")?;
+    for column in ["formatted_text", "app", "window_title", "url"] {
+        if !columns.iter().any(|c| c == column) {
+            conn.execute(&format!("ALTER TABLE history ADD COLUMN {column} TEXT"), [])
+                .with_context(|| format!("migration : colonne {column}"))?;
+        }
     }
     Ok(())
 }
@@ -145,6 +160,9 @@ mod tests {
             latency_ms: 800,
             model: "m".into(),
             error: None,
+            app: Some("Slack".into()),
+            window_title: None,
+            url: None,
         }
     }
 
@@ -157,6 +175,7 @@ mod tests {
         let list = db.list(10).unwrap();
         assert_eq!(list.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["b", "a"], "plus récent d'abord");
         assert_eq!(list[0].formatted_text.as_deref(), Some("Texte b."));
+        assert_eq!(list[0].app.as_deref(), Some("Slack"));
         assert_eq!(db.list(1).unwrap().len(), 1);
         db.delete("b").unwrap();
         assert_eq!(db.list(10).unwrap()[0].id, "a");
@@ -182,6 +201,7 @@ mod tests {
         let list = db.list(10).unwrap();
         assert_eq!(list[0].id, "x");
         assert_eq!(list[0].formatted_text, None);
+        assert_eq!(list[0].app, None);
         db.insert(&entry("y", "2026-01-02T00:00:00Z")).unwrap();
         assert_eq!(db.list(10).unwrap().len(), 2);
     }

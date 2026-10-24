@@ -16,6 +16,8 @@ function statusChip(e: HistoryEntry) {
       return <span className="chip warn">vide</span>;
     case "paste_failed":
       return <span className="chip warn">collage échoué</span>;
+    case "paste_unverified":
+      return <span className="chip warn">collage non vérifié</span>;
     case "asr_failed":
       return <span className="chip bad">erreur ASR</span>;
     default:
@@ -87,6 +89,11 @@ export function HistoryPage() {
               <div className="meta">
                 <span>{fmtDate.format(new Date(e.createdAt))}</span>
                 {statusChip(e)}
+                {e.app && (
+                  <span className="chip" title={[e.windowTitle, e.url].filter(Boolean).join("\n")}>
+                    {e.app}
+                  </span>
+                )}
                 <span>{(e.durationMs / 1000).toFixed(1)} s audio</span>
                 <span>{e.latencyMs} ms</span>
                 <span>{e.model}</span>

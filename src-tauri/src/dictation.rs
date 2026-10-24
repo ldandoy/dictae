@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::asr::{self, AsrConfig};
 use crate::audio::{self, Capture, Recorder};
+use crate::context::{self, InsertionContext, Verification};
 use crate::db::HistoryEntry;
 use crate::format::{self, FormatConfig};
 use crate::models;
@@ -83,6 +84,8 @@ struct Inner {
     generation: u64,
     pressed_at: Option<Instant>,
     stream: Option<Arc<StreamSession>>,
+    /// Lecture du contexte de saisie lancée au début de la dictée.
+    context_task: Option<std::thread::JoinHandle<Option<InsertionContext>>>,
 }
 
 pub struct Dictation {
@@ -111,6 +114,7 @@ impl Dictation {
                 generation: 0,
                 pressed_at: None,
                 stream: None,
+                context_task: None,
             }),
         })
     }
@@ -206,6 +210,7 @@ impl Dictation {
             let mut g = self.inner.lock();
             g.generation += 1;
             g.pressed_at = None;
+            g.context_task = None;
             (g.phase, g.stream.take())
         };
         if let Some(stream) = stream {
@@ -231,6 +236,7 @@ impl Dictation {
                 };
                 self.set_state(Phase::Recording, mode, Some(msg), false);
                 self.spawn_level_loop();
+                self.start_context_capture();
                 self.start_stream();
             }
             Err(e) => {
@@ -240,6 +246,37 @@ impl Dictation {
                 self.clear_message_later(Duration::from_secs(4));
             }
         }
+    }
+
+    /// Lit l'application active et le champ focalisé en arrière-plan (UI Automation).
+    fn start_context_capture(self: &Arc<Self>) {
+        if !self.settings().context_enabled {
+            return;
+        }
+        let task = std::thread::Builder::new()
+            .name("dictae-context".into())
+            .spawn(|| match context::capture() {
+                Ok(ctx) => {
+                    log::info!(
+                        "contexte : {} « {} » {} | avant {} car., après {} car., sélection {} car., curseur {}, {} ms",
+                        ctx.app,
+                        ctx.window_title.chars().take(60).collect::<String>(),
+                        ctx.url.as_deref().unwrap_or(""),
+                        ctx.before.chars().count(),
+                        ctx.after.chars().count(),
+                        ctx.selected.chars().count(),
+                        if ctx.caret_known { "connu" } else { "inconnu" },
+                        ctx.capture_ms
+                    );
+                    Some(ctx)
+                }
+                Err(e) => {
+                    log::warn!("contexte de saisie illisible : {e:#}");
+                    None
+                }
+            })
+            .ok();
+        self.inner.lock().context_task = task;
     }
 
     /// Lance la transcription en continu si elle est activée et possible.
@@ -314,7 +351,7 @@ impl Dictation {
     }
 
     fn finish(self: &Arc<Self>) {
-        let (generation, mode, stream) = {
+        let (generation, mode, stream, context_task) = {
             let mut g = self.inner.lock();
             if g.phase != Phase::Recording {
                 return;
@@ -322,7 +359,7 @@ impl Dictation {
             g.phase = Phase::Processing;
             g.generation += 1;
             g.pressed_at = None;
-            (g.generation, g.mode, g.stream.take())
+            (g.generation, g.mode, g.stream.take(), g.context_task.take())
         };
         self.set_state(Phase::Processing, mode, Some("Transcription…"), false);
 
@@ -350,7 +387,14 @@ impl Dictation {
 
         let this = self.clone();
         tauri::async_runtime::spawn(async move {
-            this.process(capture, generation, stream).await;
+            let ctx = match context_task {
+                Some(task) => tauri::async_runtime::spawn_blocking(move || task.join().ok().flatten())
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            this.process(capture, generation, stream, ctx).await;
         });
     }
 
@@ -425,9 +469,17 @@ impl Dictation {
         }
     }
 
-    async fn process(self: Arc<Self>, capture: Capture, generation: u64, stream: Option<Arc<StreamSession>>) {
+    async fn process(
+        self: Arc<Self>,
+        capture: Capture,
+        generation: u64,
+        stream: Option<Arc<StreamSession>>,
+        ctx: Option<InsertionContext>,
+    ) {
         let state = self.app.state::<AppState>();
         let settings = state.settings.read().clone();
+        // Pas de contexte exploitable dans un champ mot de passe.
+        let ctx = ctx.filter(|c| !c.password);
 
         log::info!(
             "dictée : {} ms d'audio ({} Hz source), moteur {}{}",
@@ -461,6 +513,9 @@ impl Dictation {
             latency_ms: started.elapsed().as_millis() as i64,
             model: String::new(),
             error: None,
+            app: ctx.as_ref().map(|c| c.app.clone()).filter(|a| !a.is_empty()),
+            window_title: ctx.as_ref().map(|c| c.window_title.clone()).filter(|t| !t.is_empty()),
+            url: ctx.as_ref().and_then(|c| c.url.clone()),
         };
 
         let raw = match transcribed {
@@ -496,6 +551,7 @@ impl Dictation {
                 base_url: settings.ollama_base_url.clone(),
                 model: settings.ollama_model.clone(),
                 instructions: settings.format_instructions.clone(),
+                context: ctx.clone(),
             };
             match format::format_text(&state.http, &cfg, &raw).await {
                 Ok(f) => {
@@ -518,13 +574,35 @@ impl Dictation {
             }
         }
 
+        // Espaces et majuscule initiale selon ce qui entoure le curseur.
+        if let Some(c) = ctx.as_ref() {
+            final_text = context::smart_spacing(&final_text, c);
+        }
+
         let to_paste = final_text.clone();
         let (restore_clipboard, paste_delay_ms) = (settings.restore_clipboard, settings.paste_delay_ms);
         let pasted = tauri::async_runtime::spawn_blocking(move || paste::paste_text(&to_paste, restore_clipboard, paste_delay_ms)).await;
         match pasted {
             Ok(Ok(())) => {
-                entry.pasted_text = Some(final_text);
-                let msg = if entry.error.is_some() { "Collé (sans mise en forme)" } else { "Collé ✓" };
+                entry.pasted_text = Some(final_text.clone());
+                let verification = match ctx.as_ref() {
+                    Some(c) if c.readable => {
+                        let text = final_text.clone();
+                        tauri::async_runtime::spawn_blocking(move || context::verify_pasted(&text))
+                            .await
+                            .unwrap_or(Verification::Unavailable)
+                    }
+                    _ => Verification::Unavailable,
+                };
+                let msg = match (verification, entry.error.is_some()) {
+                    (Verification::Missing, _) => {
+                        entry.status = "paste_unverified".into();
+                        "Collé ? Le texte n'a pas été retrouvé dans le champ"
+                    }
+                    (_, true) => "Collé (sans mise en forme)",
+                    (Verification::Verified, false) => "Collé ✓ (vérifié)",
+                    (Verification::Unavailable, false) => "Collé ✓",
+                };
                 self.set_state(Phase::Idle, Mode::PushToTalk, Some(msg), false);
             }
             Ok(Err(e)) => {

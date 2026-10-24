@@ -105,6 +105,33 @@ relâchement, contre 2,5 s en bloc ; sur une dictée longue le gain est proporti
 durée, l'attente ne dépendant plus que du dernier segment. Les phrases hallucinées
 classiques de whisper sur le silence (« Sous-titres réalisés par… ») sont filtrées.
 
+## Contexte de saisie par UI Automation (24 octobre 2026)
+
+`context.rs` lit, au début de chaque dictée et dans un thread à part (COM MTA) :
+
+- la **fenêtre active** (`GetForegroundWindow`), son titre et l'exécutable du processus,
+  traduit en nom lisible (« Google Chrome », « Visual Studio Code »…) ;
+- le **champ focalisé** (`IUIAutomation::GetFocusedElement`) : via `TextPattern` la
+  sélection courante ou, à défaut, le caret (`TextPattern2::GetCaretRange`), puis 400
+  caractères avant et 120 après ; à défaut le texte du `ValuePattern` ; les champs mot de
+  passe sont ignorés ;
+- pour les navigateurs, l'**URL** : premier contrôle `Edit` de la fenêtre dont la valeur
+  ressemble à une URL (barre d'adresse).
+
+Usage :
+
+1. `smart_spacing` ajoute l'espace manquant avant/après et met la première lettre en
+   minuscule quand le curseur est au milieu d'une phrase (sauf sigle).
+2. Le prompt Ollama reçoit un bloc « Contexte » (application, titre, URL, texte avant/après)
+   pour adapter majuscule initiale, ponctuation finale et registre, avec l'interdiction
+   explicite de recopier ce contexte.
+3. Après le collage, `verify_pasted` relit le champ et cherche le texte collé juste avant le
+   caret : statut `paste_unverified` et message « Collé ? » s'il n'y est pas, « Collé ✓
+   (vérifié) » sinon ; applications sans UIA (terminaux…) → « Collé ✓ » sans vérification.
+
+L'historique garde application, titre de fenêtre et URL. Le tout se désactive dans les
+réglages (« Lire le contexte de saisie »).
+
 ## Choix et compromis
 
 - **ASR via API compatible OpenAI** en option : zéro infrastructure, et les presets

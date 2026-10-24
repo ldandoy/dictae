@@ -2,6 +2,7 @@
 
 mod asr;
 mod audio;
+mod context;
 mod db;
 mod dictation;
 mod format;
@@ -141,6 +142,7 @@ async fn test_format(state: State<'_, AppState>, sample: Option<String>) -> Resu
             base_url: s.ollama_base_url.clone(),
             model: s.ollama_model.clone(),
             instructions: s.format_instructions.clone(),
+            context: None,
         }
     };
     let raw = sample.unwrap_or_else(|| {
