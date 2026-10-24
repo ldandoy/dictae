@@ -147,6 +147,18 @@ l'emportant à chaque position, sans re-analyser le texte déjà remplacé. Chaq
 incrémente un compteur qui ordonne les amorces. Le fournisseur API reçoit les termes dans
 le champ `prompt` de `/audio/transcriptions`.
 
+## Usage quotidien (24 octobre 2026)
+
+- **Micro** : liste des périphériques d'entrée (cpal) dans les réglages ; vide = micro par
+  défaut de Windows, repli sur le défaut si le micro choisi disparaît.
+- **Sons** : quatre signaux courts synthétisés à la volée (`sounds.rs`, WAV 16 kHz en
+  mémoire) joués par `PlaySound` en asynchrone : début, fin, collé, erreur. Désactivables.
+- **Lancement à l'ouverture de session** : plugin `autostart` avec l'argument `--hidden`,
+  qui démarre l'app réduite dans la zone de notification (hub caché, flow bar visible).
+- **Installateur** : `npm run tauri build` produit un installateur NSIS (par utilisateur,
+  sans élévation) et un MSI dans `src-tauri/target/release/bundle/`. Le binaire n'est pas
+  signé : SmartScreen avertira au premier lancement.
+
 ## Choix et compromis
 
 - **ASR via API compatible OpenAI** en option : zéro infrastructure, et les presets

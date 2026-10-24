@@ -10,6 +10,7 @@ mod local_asr;
 mod models;
 mod paste;
 mod settings;
+mod sounds;
 mod stream;
 mod vocab;
 
@@ -22,7 +23,11 @@ use parking_lot::{Mutex, RwLock};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+/// Argument passé par le lancement automatique : démarrer réduit dans la zone de notification.
+const HIDDEN_ARG: &str = "--hidden";
 
 use crate::audio::Recorder;
 use crate::db::{Db, HistoryEntry};
@@ -60,6 +65,9 @@ fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings)
             return Err(format!("{e:#}"));
         }
     }
+    if settings.launch_at_login != previous.launch_at_login {
+        apply_autostart(&app, settings.launch_at_login).map_err(|e| format!("{e:#}"))?;
+    }
     settings
         .save(&state.settings_path)
         .map_err(|e| format!("{e:#}"))?;
@@ -84,6 +92,11 @@ async fn test_asr(state: State<'_, AppState>) -> Result<String, String> {
         }
     };
     asr::probe(&state.http, &cfg).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn list_input_devices() -> Vec<String> {
+    audio::list_input_devices()
 }
 
 #[tauri::command]
@@ -227,6 +240,17 @@ fn show_hub(app: AppHandle) {
 
 // ----- helpers ---------------------------------------------------------------
 
+fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<()> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| anyhow!("activation du lancement automatique : {e}"))?;
+    } else {
+        manager.disable().map_err(|e| anyhow!("désactivation du lancement automatique : {e}"))?;
+    }
+    log::info!("lancement à l'ouverture de session : {}", if enabled { "activé" } else { "désactivé" });
+    Ok(())
+}
+
 fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
@@ -333,6 +357,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::Builder::new().args([HIDDEN_ARG]).build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -385,6 +410,11 @@ pub fn run() {
             }
             position_flowbar(app.handle());
             preload_local_model(app.handle());
+            if std::env::args().any(|a| a == HIDDEN_ARG) {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -411,6 +441,7 @@ pub fn run() {
             list_vocabulary,
             save_vocabulary,
             delete_vocabulary,
+            list_input_devices,
             get_dictation_state,
             toggle_dictation,
             cancel_dictation,

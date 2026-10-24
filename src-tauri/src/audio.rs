@@ -33,8 +33,40 @@ pub struct Live {
 }
 
 enum Cmd {
-    Start(mpsc::Sender<Result<Live>>),
+    /// Démarre la capture sur le périphérique nommé (chaîne vide = micro par défaut).
+    Start(String, mpsc::Sender<Result<Live>>),
     Stop(mpsc::Sender<Result<Capture>>),
+}
+
+/// Noms des périphériques d'entrée disponibles.
+pub fn list_input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    let mut names: Vec<String> = host
+        .input_devices()
+        .map(|devices| {
+            devices
+                .filter_map(|d| d.description().ok().map(|desc| desc.name().to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn pick_input_device(host: &cpal::Host, wanted: &str) -> Result<cpal::Device> {
+    let wanted = wanted.trim();
+    if !wanted.is_empty() {
+        if let Ok(devices) = host.input_devices() {
+            for device in devices {
+                if device.description().map(|d| d.name() == wanted).unwrap_or(false) {
+                    return Ok(device);
+                }
+            }
+        }
+        log::warn!("micro « {wanted} » introuvable, micro par défaut utilisé");
+    }
+    host.default_input_device().context("aucun microphone par défaut")
 }
 
 /// Poignée clonable vers le thread audio.
@@ -61,10 +93,10 @@ impl Recorder {
         }
     }
 
-    pub fn start(&self) -> Result<()> {
+    pub fn start(&self, device: &str) -> Result<()> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
-            .send(Cmd::Start(reply_tx))
+            .send(Cmd::Start(device.to_string(), reply_tx))
             .map_err(|_| anyhow!("thread audio arrêté"))?;
         let live = reply_rx
             .recv()
@@ -107,11 +139,11 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, level: Arc<AtomicU32>) {
     let mut active: Option<Active> = None;
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            Cmd::Start(reply) => {
+            Cmd::Start(device, reply) => {
                 let result = if active.is_some() {
                     Err(anyhow!("un enregistrement est déjà en cours"))
                 } else {
-                    match open_stream(level.clone()) {
+                    match open_stream(level.clone(), &device) {
                         Ok(a) => {
                             let live = Live {
                                 buffer: a.buffer.clone(),
@@ -145,11 +177,9 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, level: Arc<AtomicU32>) {
     }
 }
 
-fn open_stream(level: Arc<AtomicU32>) -> Result<Active> {
+fn open_stream(level: Arc<AtomicU32>, wanted_device: &str) -> Result<Active> {
     let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .context("aucun microphone par défaut")?;
+    let device = pick_input_device(&host, wanted_device)?;
     let supported = device
         .default_input_config()
         .context("configuration micro indisponible")?;

@@ -28,6 +28,9 @@ export interface Settings {
   ollamaModel: string;
   formatInstructions: string;
   contextEnabled: boolean;
+  inputDevice: string;
+  soundsEnabled: boolean;
+  launchAtLogin: boolean;
   shortcut: string;
   restoreClipboard: boolean;
   pasteDelayMs: number;
@@ -82,6 +85,7 @@ export interface VocabEntry {
 }
 
 export const api = {
+  listInputDevices: () => invoke<string[]>("list_input_devices"),
   listVocabulary: () => invoke<VocabEntry[]>("list_vocabulary"),
   saveVocabulary: (entry: VocabEntry) => invoke<VocabEntry>("save_vocabulary", { entry }),
   deleteVocabulary: (id: string) => invoke<void>("delete_vocabulary", { id }),

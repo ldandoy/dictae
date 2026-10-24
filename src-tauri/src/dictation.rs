@@ -21,6 +21,7 @@ use crate::format::{self, FormatConfig};
 use crate::models;
 use crate::paste;
 use crate::settings::Settings;
+use crate::sounds::{self, Sound};
 use crate::stream::StreamSession;
 use crate::vocab::Vocabulary;
 use crate::AppState;
@@ -239,13 +240,21 @@ impl Dictation {
 
     // ----- transitions --------------------------------------------------
 
+    fn play(&self, sound: Sound) {
+        if self.settings().sounds_enabled {
+            sounds::play(sound);
+        }
+    }
+
     fn begin(self: &Arc<Self>, mode: Mode) {
-        match self.recorder.start() {
+        let device = self.settings().input_device;
+        match self.recorder.start(&device) {
             Ok(()) => {
                 let msg = match mode {
                     Mode::HandsFree => "Mains libres : cliquez ou appuyez pour terminer",
                     Mode::PushToTalk => "Enregistrement…",
                 };
+                self.play(Sound::Start);
                 self.set_state(Phase::Recording, mode, Some(msg), false);
                 self.spawn_level_loop();
                 self.start_context_capture();
@@ -253,6 +262,7 @@ impl Dictation {
             }
             Err(e) => {
                 log::error!("démarrage micro impossible : {e:#}");
+                self.play(Sound::Error);
                 let msg = format!("Micro indisponible : {e}");
                 self.set_state(Phase::Idle, Mode::PushToTalk, Some(&msg), true);
                 self.clear_message_later(Duration::from_secs(4));
@@ -378,6 +388,7 @@ impl Dictation {
             g.pressed_at = None;
             (g.generation, g.mode, g.stream.take(), g.context_task.take())
         };
+        self.play(Sound::Stop);
         self.set_state(Phase::Processing, mode, Some("Transcription…"), false);
 
         let capture = match self.recorder.stop() {
@@ -545,6 +556,7 @@ impl Dictation {
             }
             Err(e) => {
                 log::error!("transcription impossible : {e:#}");
+                self.play(Sound::Error);
                 entry.status = "asr_failed".into();
                 entry.error = Some(format!("{e:#}"));
                 let msg = format!("Erreur de transcription : {e}");
@@ -642,10 +654,12 @@ impl Dictation {
                     (Verification::Verified, false) => "Collé ✓ (vérifié)",
                     (Verification::Unavailable, false) => "Collé ✓",
                 };
+                self.play(if verification == Verification::Missing { Sound::Error } else { Sound::Done });
                 self.set_state(Phase::Idle, Mode::PushToTalk, Some(msg), false);
             }
             Ok(Err(e)) => {
                 log::error!("collage impossible : {e:#}");
+                self.play(Sound::Error);
                 entry.status = "paste_failed".into();
                 entry.error = Some(format!("{e:#}"));
                 self.set_state(

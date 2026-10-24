@@ -38,6 +38,12 @@ pub struct Settings {
     /// l'utiliser pour la mise en forme et vérifier le collage.
     pub context_enabled: bool,
 
+    /// Nom du micro (voir `audio::list_input_devices`) ; vide = micro par défaut.
+    pub input_device: String,
+    /// Sons de début / fin de dictée.
+    pub sounds_enabled: bool,
+    /// Lancer Dictae (réduit dans la zone de notification) à l'ouverture de session.
+    pub launch_at_login: bool,
     /// Raccourci global push-to-talk, format `Ctrl+Shift+Space`.
     pub shortcut: String,
     /// Remettre le contenu précédent du presse-papiers après le collage.
@@ -65,6 +71,9 @@ impl Default for Settings {
             ollama_model: "qwen3.5:4b".into(),
             format_instructions: String::new(),
             context_enabled: true,
+            input_device: String::new(),
+            sounds_enabled: true,
+            launch_at_login: false,
             shortcut: "Ctrl+Shift+Space".into(),
             restore_clipboard: true,
             paste_delay_ms: 60,

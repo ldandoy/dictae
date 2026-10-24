@@ -15,9 +15,11 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
   const [s, setS] = useState<Settings | null>(null);
   const [toast, setToast] = useState<Toast>({ kind: "", text: "" });
   const [busy, setBusy] = useState(false);
+  const [devices, setDevices] = useState<string[]>([]);
 
   useEffect(() => {
     api.getSettings().then(setS);
+    api.listInputDevices().then(setDevices).catch(() => setDevices([]));
   }, []);
 
   if (!s) return <div className="empty-state">Chargement…</div>;
@@ -49,6 +51,47 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
       <p className="sub">Transcription, mise en forme, raccourci et collage. Tout est stocké localement.</p>
 
       <div className="form">
+        <div className="card" style={{ display: "grid", gap: 12 }}>
+          <strong>Microphone et retours</strong>
+          <div className="field">
+            <label>Microphone</label>
+            <div className="row">
+              <select value={s.inputDevice} onChange={(e) => set("inputDevice", e.target.value)} style={{ flex: 1 }}>
+                <option value="">Micro par défaut de Windows</option>
+                {(s.inputDevice && !devices.includes(s.inputDevice) ? [s.inputDevice, ...devices] : devices).map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn small"
+                onClick={() => api.listInputDevices().then(setDevices).catch(() => undefined)}
+              >
+                Rafraîchir
+              </button>
+            </div>
+          </div>
+          <div className="field check">
+            <input
+              id="sounds"
+              type="checkbox"
+              checked={s.soundsEnabled}
+              onChange={(e) => set("soundsEnabled", e.target.checked)}
+            />
+            <label htmlFor="sounds">Jouer un son au début et à la fin de la dictée</label>
+          </div>
+          <div className="field check">
+            <input
+              id="autostart"
+              type="checkbox"
+              checked={s.launchAtLogin}
+              onChange={(e) => set("launchAtLogin", e.target.checked)}
+            />
+            <label htmlFor="autostart">Lancer Dictae à l'ouverture de session (réduit dans la zone de notification)</label>
+          </div>
+        </div>
+
         <div className="card" style={{ display: "grid", gap: 12 }}>
           <strong>Transcription</strong>
           <div className="row">
