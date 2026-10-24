@@ -1,0 +1,6 @@
+[env]
+# whisper-rs-sys régénère ses bindings avec bindgen : libclang (LLVM) est requis sous Windows.
+# Installation : winget install LLVM.LLVM  (puis adapter le chemin ci-dessous si besoin).
+LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
+# Les dossiers incrémentaux déclenchent "Accès refusé" sur cette machine.
+CARGO_INCREMENTAL = "0"

@@ -1,0 +1,115 @@
+# Architecture de Dictae (option B : Tauri 2 + Rust)
+
+Décision du 24 octobre 2026 : cœur natif en Rust via Tauri 2, interface WebView en
+React. Un seul binaire, pas de helper séparé : les responsabilités que Wispr Flow
+délègue à son helper .NET (hooks clavier, collage, plus tard UI Automation) vivent
+dans le process Rust.
+
+## Vue d'ensemble
+
+```
+ ┌──────────────── WebView (React) ────────────────┐
+ │  hub (index.html)        flowbar (flowbar.html) │
+ │  historique, réglages    pilule flottante        │
+ └───────────▲──────────────────────▲──────────────┘
+             │ invoke / events (Tauri IPC)
+ ┌───────────┴──────────────────────┴──────────────┐
+ │ lib.rs      commandes, tray, raccourci global    │
+ │ dictation   Idle → Recording → Processing        │
+ │ audio       cpal → PCM mono → 16 kHz → WAV       │
+ │ asr         POST {base}/audio/transcriptions     │
+ │ paste       arboard (clipboard) + enigo (Ctrl+V) │
+ │ db          rusqlite : table history             │
+ │ settings    settings.json                         │
+ └──────────────────────────────────────────────────┘
+```
+
+## Cycle d'une dictée (MVP)
+
+1. Le plugin `global-shortcut` reçoit `Pressed` sur le raccourci (défaut `Ctrl+Shift+Space`).
+2. `Dictation::begin` demande au thread audio d'ouvrir le micro par défaut (cpal, WASAPI).
+   Le flux est converti en mono f32 à la volée ; un niveau RMS lissé alimente la flow bar
+   toutes les 50 ms (`dictation://level`).
+3. `Released` : si l'appui a duré moins de `handsFreeTapMs`, la dictée passe en mode
+   mains libres (le prochain appui ou un clic termine) ; sinon `finish`.
+4. `finish` arrête le flux, rééchantillonne en 16 kHz, encode un WAV PCM16, puis lance
+   une tâche async : transcription HTTP, collage, écriture en base.
+5. `paste::paste_text` sauvegarde le presse-papiers, y écrit le texte, envoie Ctrl+V par
+   `SendInput` (code virtuel `VK_V`, indépendant de la disposition clavier), puis
+   restaure l'ancien contenu après 350 ms.
+6. Une ligne `history` est écrite (texte, statut, durée audio, latence, modèle, erreur) et
+   diffusée au hub (`dictation://result`).
+
+Un compteur `generation` protège contre les résultats périmés : une annulation pendant
+la transcription empêche le collage.
+
+## Mode 100 % local (décision du 24 octobre 2026)
+
+Ollama ne fait pas de reconnaissance vocale (il sert des modèles de texte et, depuis
+la 0.40.8, de la synthèse vocale). Dictae embarque donc son propre moteur :
+
+- **Transcription : whisper.cpp intégré** via la crate `whisper-rs` (`local_asr.rs`).
+  Le modèle GGML est chargé une fois en mémoire au démarrage (`preload_local_model`) et
+  réutilisé ; chaque dictée crée un `WhisperState`, reçoit le PCM f32 16 kHz capturé
+  (complété à 1,1 s minimum), une amorce ponctuée dans la langue choisie, et renvoie la
+  concaténation des segments. Les marqueurs non parlés (`[Musique]`, `(rires)`) sont retirés.
+  Sans SDK CUDA ni Vulkan sur la machine, l'inférence tourne sur CPU (cœurs physiques).
+- **Catalogue de modèles** (`models.rs`) : large-v3-turbo q5_0 (574 Mo), medium q5_0,
+  small q5_1, base q5_1, téléchargés depuis `ggerganov/whisper.cpp` sur Hugging Face
+  dans `%APPDATA%\net.overconsulting.dictae\models\`, avec progression diffusée au hub
+  (`models://progress`) et validation de la taille.
+- **Mise en forme : Ollama** (`format.rs`) : `POST /api/chat` sans raisonnement
+  (`think: false`), température 0, prompt système strict (ponctuation, majuscules,
+  hésitations ; ni reformulation ni traduction). La réponse est nettoyée (balises
+  `<think>`, guillemets englobants) et un garde-fou de longueur rejette une réponse
+  implausible au profit du texte brut. Toute erreur Ollama est non bloquante : le brut
+  est collé et l'historique note « mise en forme indisponible ».
+- Le fournisseur API compatible OpenAI reste disponible dans les réglages.
+
+Mesures du 24 octobre 2026 sur cette machine (Ryzen 9 3900XT 12 cœurs, RTX 3080), fixture
+TTS française de 7 s :
+
+| Étape | Modèle | Temps |
+|---|---|---|
+| whisper.cpp CPU | small q5_1 | 2,5 s |
+| whisper.cpp CPU | large-v3-turbo q5_0 | 10,7 s |
+| Ollama (GPU) | qwen3.5:4b, modèle chaud | 0,3 s |
+| Ollama (GPU) | qwen3.5:4b, premier appel (chargement) | 9 s |
+| Ollama | Qwen3.8-27B IQ3_XXS (déborde la VRAM) | 113 s |
+
+D'où les défauts : `small-q5_1` pour la transcription et `qwen3.5:4b` pour la mise en
+forme (`keep_alive` 30 min pour rester chaud). Large-v3-turbo redevient intéressant avec
+l'accélération GPU de whisper.cpp (feature `vulkan`/`cuda`, SDK à installer).
+
+## Choix et compromis
+
+- **ASR via API compatible OpenAI** en option : zéro infrastructure, et les presets
+  (OpenAI, Groq, serveur local type faster-whisper) se changent dans les réglages.
+- **Fichier WAV complet par dictée** plutôt que du streaming : plus simple, latence
+  acceptable pour des dictées courtes. Le streaming (WebSocket/gRPC) est l'étape suivante.
+- **Rééchantillonnage maison** (moyenne par fenêtre) : suffisant pour la parole ; à
+  remplacer par un filtre correct (`rubato`) si la qualité ASR en souffre.
+- **Collage par presse-papiers** comme Wispr Flow. Sans vérification UI Automation pour
+  l'instant : le statut `paste_failed` et le texte laissé dans le presse-papiers couvrent
+  les cas d'échec.
+- **Flow bar non focusable** (`focusable: false`) pour que le focus reste dans
+  l'application cible. Un grip dédié sert au déplacement ; le reste de la pilule est
+  cliquable (démarrer/terminer) et un double-clic ouvre le hub.
+- **Fermer le hub le cache** : l'application vit dans la zone de notification.
+
+## Feuille de route après le MVP
+
+1. Vérification du collage et contexte de saisie par UI Automation (`windows` crate :
+   `IUIAutomation`, `TextPattern`) ; détection de l'application active (nom, URL navigateur).
+2. Formatage contextuel : enrichir le prompt Ollama avec le texte avant/après le curseur,
+   le dictionnaire, le style par application ; remplacements et snippets.
+   Accélération GPU de whisper.cpp (feature `vulkan` ou `cuda` de `whisper-rs`, SDK requis).
+3. Streaming audio et transcription partielle pour réduire la latence perçue.
+4. Dictionnaire, snippets, styles, statistiques dans le hub ; export/import.
+5. Sons de début/fin, mute de la musique pendant la dictée, choix du micro, mode commande.
+6. Signature du binaire et mise à jour automatique (plugin `updater`).
+
+## Données locales
+
+`%APPDATA%\net.overconsulting.dictae\` : `settings.json` (clé API comprise, en clair
+pour le MVP ; à chiffrer via DPAPI ensuite) et `dictae.sqlite` (table `history`).
