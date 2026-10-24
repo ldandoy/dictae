@@ -81,6 +81,30 @@ D'où les défauts : `small-q5_1` pour la transcription et `qwen3.5:4b` pour la 
 forme (`keep_alive` 30 min pour rester chaud). Large-v3-turbo redevient intéressant avec
 l'accélération GPU de whisper.cpp (feature `vulkan`/`cuda`, SDK à installer).
 
+## Transcription en continu (24 octobre 2026)
+
+Pour ne pas attendre toute la transcription après le relâchement de la touche,
+`stream.rs` transcrit pendant l'enregistrement :
+
+1. Un thread lit le tampon micro brut toutes les 100 ms, le rééchantillonne en 16 kHz
+   (`Resampler` incrémental à bornes entières, donc identique quel que soit le découpage).
+2. Le `Segmenter` détecte la parole par énergie (seuil = 3,5 × plancher de bruit adaptatif,
+   trames de 20 ms) et coupe un segment après 500 ms de silence si au moins 0,8 s de parole
+   a été vue ; un segment de plus de 12 s est coupé au point le plus calme des 2 dernières
+   secondes. 0,5 s de silence est gardé avant la parole, 0,2 s après.
+3. Un worker transcrit les segments **séquentiellement** (un seul whisper à la fois sur
+   CPU), avec les 150 derniers caractères déjà transcrits comme amorce pour garder la
+   cohérence (casse, ponctuation, noms). Chaque résultat est diffusé en `dictation://partial`
+   et affiché dans la flow bar et le hub.
+4. Au relâchement, `finish` arrête le micro **sans vider le tampon** (le flux lit encore la
+   fin), le flux transcrit le reste et renvoie le texte complet ; en cas d'échec, la
+   transcription complète classique prend le relais.
+
+Mesure sur la fixture de 7 s (small, CPU) : texte complet disponible 1,8 s après le
+relâchement, contre 2,5 s en bloc ; sur une dictée longue le gain est proportionnel à la
+durée, l'attente ne dépendant plus que du dernier segment. Les phrases hallucinées
+classiques de whisper sur le silence (« Sous-titres réalisés par… ») sont filtrées.
+
 ## Choix et compromis
 
 - **ASR via API compatible OpenAI** en option : zéro infrastructure, et les presets

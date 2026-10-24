@@ -9,6 +9,7 @@ mod local_asr;
 mod models;
 mod paste;
 mod settings;
+mod stream;
 
 use std::path::PathBuf;
 use std::sync::Arc;

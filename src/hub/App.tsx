@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, onDictationState, type DictationState, type Settings } from "../lib/api";
+import { api, onDictationPartial, onDictationState, type DictationState, type Settings } from "../lib/api";
 import { HistoryPage } from "./HistoryPage";
 import { SettingsPage } from "./SettingsPage";
 import { AboutPage } from "./AboutPage";
@@ -10,13 +10,18 @@ export function App() {
   const [page, setPage] = useState<Page>("history");
   const [state, setState] = useState<DictationState | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [partial, setPartial] = useState("");
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    const unlisteners: (() => void)[] = [];
     api.getDictationState().then(setState).catch(() => undefined);
     api.getSettings().then(setSettings).catch(() => undefined);
-    onDictationState(setState).then((u) => (unlisten = u));
-    return () => unlisten?.();
+    onDictationState((s) => {
+      setState(s);
+      if (s.phase === "idle") setPartial("");
+    }).then((u) => unlisteners.push(u));
+    onDictationPartial(setPartial).then((u) => unlisteners.push(u));
+    return () => unlisteners.forEach((u) => u());
   }, []);
 
   return (
@@ -37,7 +42,7 @@ export function App() {
         </button>
       </nav>
       <main className="hub-main">
-        <StatusBanner state={state} shortcut={settings?.shortcut ?? "…"} />
+        <StatusBanner state={state} shortcut={settings?.shortcut ?? "…"} partial={partial} />
         {page === "history" && <HistoryPage />}
         {page === "settings" && (
           <SettingsPage
@@ -52,7 +57,15 @@ export function App() {
   );
 }
 
-function StatusBanner({ state, shortcut }: { state: DictationState | null; shortcut: string }) {
+function StatusBanner({
+  state,
+  shortcut,
+  partial,
+}: {
+  state: DictationState | null;
+  shortcut: string;
+  partial: string;
+}) {
   const phase = state?.phase ?? "idle";
   const label =
     phase === "recording"
@@ -66,7 +79,9 @@ function StatusBanner({ state, shortcut }: { state: DictationState | null; short
   return (
     <div className={`status ${phase}`}>
       <span className="pill">{label}</span>
-      {state?.message ? (
+      {partial && phase !== "idle" ? (
+        <span className="msg live">{partial}</span>
+      ) : state?.message ? (
         <span className={`msg ${state.error ? "error" : ""}`}>{state.message}</span>
       ) : (
         <span className="msg">

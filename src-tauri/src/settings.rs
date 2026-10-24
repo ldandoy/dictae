@@ -18,6 +18,8 @@ pub struct Settings {
     pub local_model: String,
     /// Threads pour whisper.cpp ; 0 = automatique (cœurs physiques).
     pub local_threads: u32,
+    /// Transcrire par segments pendant l'enregistrement (texte quasi immédiat au relâchement).
+    pub streaming_enabled: bool,
 
     /// Racine d'une API compatible OpenAI (`{base}/audio/transcriptions`).
     pub asr_base_url: String,
@@ -50,6 +52,7 @@ impl Default for Settings {
             // Sur CPU, small répond en ~2,5 s pour 7 s de parole ; large-v3-turbo en ~11 s.
             local_model: "small-q5_1".into(),
             local_threads: 0,
+            streaming_enabled: true,
             asr_base_url: "https://api.openai.com/v1".into(),
             asr_api_key: String::new(),
             asr_model: "gpt-4o-mini-transcribe".into(),

@@ -124,6 +124,17 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
             </>
           )}
 
+          <div className="field check">
+            <input
+              id="streaming"
+              type="checkbox"
+              checked={s.streamingEnabled}
+              onChange={(e) => set("streamingEnabled", e.target.checked)}
+            />
+            <label htmlFor="streaming">
+              Transcrire pendant l'enregistrement (segments aux pauses) : le texte arrive presque aussitôt
+            </label>
+          </div>
           <div className="row">
             <div className="field" style={{ flex: 1 }}>
               <label>Langue</label>

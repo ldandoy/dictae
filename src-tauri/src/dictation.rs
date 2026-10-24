@@ -2,6 +2,8 @@
 //!
 //! Déclencheurs : raccourci global (appui / relâchement), clic sur la flow bar,
 //! commandes depuis le hub. Les transitions sont diffusées aux fenêtres par événements.
+//! Pendant l'enregistrement, une `StreamSession` transcrit les segments au fil de l'eau ;
+//! au relâchement il ne reste que la fin à traiter.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,16 +14,18 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::asr::{self, AsrConfig};
-use crate::audio::{Capture, Recorder};
+use crate::audio::{self, Capture, Recorder};
 use crate::db::HistoryEntry;
 use crate::format::{self, FormatConfig};
 use crate::models;
 use crate::paste;
 use crate::settings::Settings;
+use crate::stream::StreamSession;
 use crate::AppState;
 
 pub const EVENT_STATE: &str = "dictation://state";
 pub const EVENT_LEVEL: &str = "dictation://level";
+pub const EVENT_PARTIAL: &str = "dictation://partial";
 pub const EVENT_RESULT: &str = "dictation://result";
 
 const MIN_DURATION_MS: u64 = 300;
@@ -60,6 +64,12 @@ struct LevelPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PartialPayload {
+    text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ResultPayload {
     entry: HistoryEntry,
 }
@@ -72,6 +82,7 @@ struct Inner {
     /// Incrémenté à chaque fin ou annulation : permet d'ignorer un résultat périmé.
     generation: u64,
     pressed_at: Option<Instant>,
+    stream: Option<Arc<StreamSession>>,
 }
 
 pub struct Dictation {
@@ -99,6 +110,7 @@ impl Dictation {
                 error: false,
                 generation: 0,
                 pressed_at: None,
+                stream: None,
             }),
         })
     }
@@ -190,12 +202,15 @@ impl Dictation {
     }
 
     pub fn cancel(self: &Arc<Self>) {
-        let phase = {
+        let (phase, stream) = {
             let mut g = self.inner.lock();
             g.generation += 1;
             g.pressed_at = None;
-            g.phase
+            (g.phase, g.stream.take())
         };
+        if let Some(stream) = stream {
+            stream.abort();
+        }
         if phase == Phase::Recording {
             if let Err(e) = self.recorder.stop() {
                 log::warn!("arrêt du micro à l'annulation : {e}");
@@ -216,6 +231,7 @@ impl Dictation {
                 };
                 self.set_state(Phase::Recording, mode, Some(msg), false);
                 self.spawn_level_loop();
+                self.start_stream();
             }
             Err(e) => {
                 log::error!("démarrage micro impossible : {e:#}");
@@ -223,6 +239,65 @@ impl Dictation {
                 self.set_state(Phase::Idle, Mode::PushToTalk, Some(&msg), true);
                 self.clear_message_later(Duration::from_secs(4));
             }
+        }
+    }
+
+    /// Lance la transcription en continu si elle est activée et possible.
+    fn start_stream(self: &Arc<Self>) {
+        let settings = self.settings();
+        if !settings.streaming_enabled {
+            return;
+        }
+        let Some(live) = self.recorder.live() else {
+            return;
+        };
+        let Some(engine) = self.segment_engine(&settings) else {
+            return;
+        };
+        let mut read_idx = 0usize;
+        let source = move || {
+            let buf = live.buffer.lock().unwrap();
+            if buf.len() > read_idx {
+                let chunk = buf[read_idx..].to_vec();
+                read_idx = buf.len();
+                chunk
+            } else {
+                Vec::new()
+            }
+        };
+        let app = self.app.clone();
+        let on_partial = move |text: &str| {
+            let _ = app.emit(EVENT_PARTIAL, PartialPayload { text: text.to_string() });
+        };
+        let session = StreamSession::start(source, live.sample_rate, engine, on_partial);
+        self.inner.lock().stream = Some(session);
+    }
+
+    /// Fonction de transcription d'un segment pour le moteur configuré.
+    fn segment_engine(&self, settings: &Settings) -> Option<Box<dyn Fn(&[f32], &str) -> Result<String> + Send + 'static>> {
+        let app = self.app.clone();
+        if settings.uses_local_asr() {
+            let state = app.state::<AppState>();
+            let path = models::installed_path(&state.models_dir, &settings.local_model)?;
+            let language = settings.language.clone();
+            let threads = settings.local_threads;
+            Some(Box::new(move |samples: &[f32], context: &str| {
+                let state = app.state::<AppState>();
+                Ok(state.local_asr.transcribe(&path, samples, &language, threads, context)?.text)
+            }))
+        } else {
+            let cfg = AsrConfig {
+                base_url: settings.asr_base_url.clone(),
+                api_key: settings.asr_api_key.clone(),
+                model: settings.asr_model.clone(),
+                language: settings.language.clone(),
+            };
+            Some(Box::new(move |samples: &[f32], _context: &str| {
+                let wav = audio::encode_wav(samples, audio::TARGET_SAMPLE_RATE)?;
+                let state = app.state::<AppState>();
+                let t = tauri::async_runtime::block_on(asr::transcribe(&state.http, &cfg, wav))?;
+                Ok(t.text)
+            }))
         }
     }
 
@@ -239,7 +314,7 @@ impl Dictation {
     }
 
     fn finish(self: &Arc<Self>) {
-        let (generation, mode) = {
+        let (generation, mode, stream) = {
             let mut g = self.inner.lock();
             if g.phase != Phase::Recording {
                 return;
@@ -247,7 +322,7 @@ impl Dictation {
             g.phase = Phase::Processing;
             g.generation += 1;
             g.pressed_at = None;
-            (g.generation, g.mode)
+            (g.generation, g.mode, g.stream.take())
         };
         self.set_state(Phase::Processing, mode, Some("Transcription…"), false);
 
@@ -255,6 +330,9 @@ impl Dictation {
             Ok(c) => c,
             Err(e) => {
                 log::error!("arrêt micro impossible : {e:#}");
+                if let Some(stream) = stream {
+                    stream.abort();
+                }
                 let msg = format!("Erreur micro : {e}");
                 self.set_state(Phase::Idle, Mode::PushToTalk, Some(&msg), true);
                 self.clear_message_later(Duration::from_secs(4));
@@ -262,6 +340,9 @@ impl Dictation {
             }
         };
         if capture.duration_ms < MIN_DURATION_MS {
+            if let Some(stream) = stream {
+                stream.abort();
+            }
             self.set_state(Phase::Idle, Mode::PushToTalk, Some("Trop court"), false);
             self.clear_message_later(Duration::from_millis(1500));
             return;
@@ -269,7 +350,7 @@ impl Dictation {
 
         let this = self.clone();
         tauri::async_runtime::spawn(async move {
-            this.process(capture, generation).await;
+            this.process(capture, generation, stream).await;
         });
     }
 
@@ -277,8 +358,8 @@ impl Dictation {
         self.inner.lock().generation == generation
     }
 
-    /// Transcrit avec le moteur choisi dans les réglages.
-    async fn transcribe(&self, settings: &Settings, capture: Capture) -> Result<Transcribed> {
+    /// Transcrit l'enregistrement complet avec le moteur choisi (chemin sans flux).
+    async fn transcribe_whole(&self, settings: &Settings, capture: Capture) -> Result<Transcribed> {
         let state = self.app.state::<AppState>();
         if settings.uses_local_asr() {
             let model_id = settings.local_model.clone();
@@ -290,7 +371,7 @@ impl Dictation {
             let app = self.app.clone();
             let result = tauri::async_runtime::spawn_blocking(move || {
                 let state = app.state::<AppState>();
-                state.local_asr.transcribe(&path, &samples, &language, threads)
+                state.local_asr.transcribe(&path, &samples, &language, threads, "")
             })
             .await
             .map_err(|e| anyhow!("tâche whisper interrompue : {e}"))??;
@@ -315,19 +396,53 @@ impl Dictation {
         }
     }
 
-    async fn process(self: Arc<Self>, capture: Capture, generation: u64) {
+    /// Termine le flux (transcription de la fin) ; `None` si aucun flux ou s'il a échoué.
+    async fn finish_stream(&self, settings: &Settings, stream: Option<Arc<StreamSession>>) -> Option<Transcribed> {
+        let stream = stream?;
+        let started = Instant::now();
+        let joined = tauri::async_runtime::spawn_blocking(move || stream.stop_and_join()).await;
+        match joined {
+            Ok(Ok(text)) => {
+                let engine = if settings.uses_local_asr() {
+                    format!("whisper:{} (flux)", settings.local_model)
+                } else {
+                    format!("{} (flux)", settings.asr_model)
+                };
+                Some(Transcribed {
+                    text,
+                    latency_ms: started.elapsed().as_millis() as u64,
+                    engine,
+                })
+            }
+            Ok(Err(e)) => {
+                log::warn!("flux en échec, transcription complète à la place : {e:#}");
+                None
+            }
+            Err(e) => {
+                log::warn!("flux interrompu, transcription complète à la place : {e}");
+                None
+            }
+        }
+    }
+
+    async fn process(self: Arc<Self>, capture: Capture, generation: u64, stream: Option<Arc<StreamSession>>) {
         let state = self.app.state::<AppState>();
         let settings = state.settings.read().clone();
 
         log::info!(
-            "dictée : {} ms d'audio ({} Hz source), moteur {}",
+            "dictée : {} ms d'audio ({} Hz source), moteur {}{}",
             capture.duration_ms,
             capture.source_sample_rate,
-            if settings.uses_local_asr() { "local" } else { "api" }
+            if settings.uses_local_asr() { "local" } else { "api" },
+            if stream.is_some() { ", en continu" } else { "" }
         );
         let duration_ms = capture.duration_ms as i64;
         let started = Instant::now();
-        let transcribed = self.transcribe(&settings, capture).await;
+        let transcribed = match self.finish_stream(&settings, stream).await {
+            Some(t) => Ok(t),
+            None => self.transcribe_whole(&settings, capture).await,
+        };
+        log::info!("texte disponible {} ms après le relâchement", started.elapsed().as_millis());
 
         if !self.is_current(generation) {
             log::info!("résultat ignoré : dictée annulée entre-temps");

@@ -18,6 +18,7 @@ export interface Settings {
   asrProvider: AsrProvider;
   localModel: string;
   localThreads: number;
+  streamingEnabled: boolean;
   asrBaseUrl: string;
   asrApiKey: string;
   asrModel: string;
@@ -87,7 +88,10 @@ export const onDictationState = (cb: (s: DictationState) => void): Promise<Unlis
 export const onDictationLevel = (cb: (level: number) => void): Promise<UnlistenFn> =>
   listen<{ level: number }>("dictation://level", (e) => cb(e.payload.level));
 
-export const onDictationResult = (cb: (entry: HistoryEntry) => void): Promise<UnlistenFn> =>
+export const onDictationPartial = (cb: (text: string) => void): Promise<UnlistenFn> =>
+  listen<{ text: string }>("dictation://partial", (e) => cb(e.payload.text));
+
+export const onDictationResult =(cb: (entry: HistoryEntry) => void): Promise<UnlistenFn> =>
   listen<{ entry: HistoryEntry }>("dictation://result", (e) => cb(e.payload.entry));
 
 export const onSettingsChanged = (cb: (s: Settings) => void): Promise<UnlistenFn> =>

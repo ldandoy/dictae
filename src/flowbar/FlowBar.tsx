@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   api,
   onDictationLevel,
+  onDictationPartial,
   onDictationState,
   type DictationState,
 } from "../lib/api";
@@ -18,6 +19,7 @@ export function FlowBar() {
     generation: 0,
   });
   const [bars, setBars] = useState<number[]>(() => Array(BAR_COUNT).fill(0));
+  const [partial, setPartial] = useState("");
   const history = useRef<number[]>([]);
 
   useEffect(() => {
@@ -29,7 +31,9 @@ export function FlowBar() {
         history.current = [];
         setBars(Array(BAR_COUNT).fill(0));
       }
+      if (s.phase === "idle") setPartial("");
     }).then((u) => unlisteners.push(u));
+    onDictationPartial(setPartial).then((u) => unlisteners.push(u));
     onDictationLevel((level) => {
       // Niveau RMS 0..1 -> hauteur de barre, avec une mémoire glissante pour l'animation.
       const h = Math.min(1, Math.pow(level * 6, 0.7));
@@ -52,7 +56,14 @@ export function FlowBar() {
             ? "ok"
             : "";
 
+  // Pendant l'enregistrement et la transcription, montrer la fin du texte déjà reconnu.
+  const livePreview =
+    partial && (state.phase === "recording" || state.phase === "processing")
+      ? `…${partial.slice(-48)}`
+      : null;
+
   const label =
+    livePreview ??
     state.message ??
     (state.phase === "recording"
       ? state.mode === "hands_free"

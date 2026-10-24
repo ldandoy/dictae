@@ -1,5 +1,7 @@
 //! Capture micro via cpal, sur un thread dédié (le `Stream` cpal n'est pas `Send`).
-//! Sortie : WAV PCM16 mono 16 kHz, prêt pour une API de transcription.
+//! Sortie : PCM f32 mono 16 kHz (+ WAV PCM16 pour les API HTTP). Pendant
+//! l'enregistrement, le tampon brut est lisible en direct (`Recorder::live`) pour la
+//! transcription en continu.
 
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -23,8 +25,15 @@ pub struct Capture {
     pub source_sample_rate: u32,
 }
 
+/// Accès en direct au tampon brut (fréquence source, mono) de l'enregistrement en cours.
+#[derive(Clone)]
+pub struct Live {
+    pub buffer: Arc<Mutex<Vec<f32>>>,
+    pub sample_rate: u32,
+}
+
 enum Cmd {
-    Start(mpsc::Sender<Result<()>>),
+    Start(mpsc::Sender<Result<Live>>),
     Stop(mpsc::Sender<Result<Capture>>),
 }
 
@@ -33,6 +42,7 @@ enum Cmd {
 pub struct Recorder {
     tx: mpsc::Sender<Cmd>,
     level: Arc<AtomicU32>,
+    live: Arc<Mutex<Option<Live>>>,
 }
 
 impl Recorder {
@@ -44,7 +54,11 @@ impl Recorder {
             .name("dictae-audio".into())
             .spawn(move || audio_thread(rx, level_for_thread))
             .expect("impossible de démarrer le thread audio");
-        Self { tx, level }
+        Self {
+            tx,
+            level,
+            live: Arc::new(Mutex::new(None)),
+        }
     }
 
     pub fn start(&self) -> Result<()> {
@@ -52,9 +66,11 @@ impl Recorder {
         self.tx
             .send(Cmd::Start(reply_tx))
             .map_err(|_| anyhow!("thread audio arrêté"))?;
-        reply_rx
+        let live = reply_rx
             .recv()
-            .map_err(|_| anyhow!("le thread audio n'a pas répondu"))?
+            .map_err(|_| anyhow!("le thread audio n'a pas répondu"))??;
+        *self.live.lock().unwrap() = Some(live);
+        Ok(())
     }
 
     pub fn stop(&self) -> Result<Capture> {
@@ -62,9 +78,16 @@ impl Recorder {
         self.tx
             .send(Cmd::Stop(reply_tx))
             .map_err(|_| anyhow!("thread audio arrêté"))?;
-        reply_rx
+        let result = reply_rx
             .recv()
-            .map_err(|_| anyhow!("le thread audio n'a pas répondu"))?
+            .map_err(|_| anyhow!("le thread audio n'a pas répondu"))?;
+        *self.live.lock().unwrap() = None;
+        result
+    }
+
+    /// Tampon brut de l'enregistrement en cours, s'il y en a un.
+    pub fn live(&self) -> Option<Live> {
+        self.live.lock().unwrap().clone()
     }
 
     /// Niveau RMS lissé du dernier bloc capturé, entre 0 et 1.
@@ -90,8 +113,12 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, level: Arc<AtomicU32>) {
                 } else {
                     match open_stream(level.clone()) {
                         Ok(a) => {
+                            let live = Live {
+                                buffer: a.buffer.clone(),
+                                sample_rate: a.sample_rate,
+                            };
                             active = Some(a);
-                            Ok(())
+                            Ok(live)
                         }
                         Err(e) => Err(e),
                     }
@@ -105,9 +132,10 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, level: Arc<AtomicU32>) {
                     Some(a) => {
                         let duration_ms = a.started.elapsed().as_millis() as u64;
                         let sample_rate = a.sample_rate;
-                        // Arrêter le flux avant de lire le tampon.
+                        // Arrêter le flux avant de lire le tampon. Le tampon n'est pas vidé :
+                        // un lecteur en continu peut encore y récupérer la fin de l'audio.
                         drop(a._stream);
-                        let samples = std::mem::take(&mut *a.buffer.lock().unwrap());
+                        let samples = a.buffer.lock().unwrap().clone();
                         finish_capture(samples, sample_rate, duration_ms)
                     }
                 };
@@ -209,27 +237,79 @@ fn finish_capture(samples: Vec<f32>, source_rate: u32, duration_ms: u64) -> Resu
     })
 }
 
-/// Rééchantillonnage simple : moyenne par fenêtre en décimation, plus proche voisin sinon.
-/// Suffisant pour de la parole 48 kHz → 16 kHz ; à remplacer par un vrai filtre plus tard.
-fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
-    if from == to || input.is_empty() {
-        return input.to_vec();
-    }
-    let ratio = from as f64 / to as f64;
-    let out_len = (input.len() as f64 / ratio).floor() as usize;
-    let mut out = Vec::with_capacity(out_len);
-    for i in 0..out_len {
-        let start = (i as f64 * ratio) as usize;
-        let mut end = ((i + 1) as f64 * ratio) as usize;
-        if end <= start {
-            end = start + 1;
+/// Rééchantillonneur incrémental : moyenne par fenêtre en décimation, plus proche
+/// voisin en interpolation. La position fractionnaire est conservée entre deux
+/// appels, donc découper l'entrée en morceaux ne change pas la sortie.
+pub struct Resampler {
+    from: u64,
+    to: u64,
+    /// Nombre d'échantillons déjà produits.
+    out_index: u64,
+    /// Index source absolu du premier échantillon de `carry`.
+    carry_base: u64,
+    carry: Vec<f32>,
+}
+
+impl Resampler {
+    pub fn new(from: u32, to: u32) -> Self {
+        Self {
+            from: from as u64,
+            to: to as u64,
+            out_index: 0,
+            carry_base: 0,
+            carry: Vec::new(),
         }
-        let end = end.min(input.len());
-        let window = &input[start..end];
-        let mean = window.iter().sum::<f32>() / window.len() as f32;
-        out.push(mean);
     }
-    out
+
+    pub fn push(&mut self, input: &[f32]) -> Vec<f32> {
+        if self.from == self.to {
+            return input.to_vec();
+        }
+        self.carry.extend_from_slice(input);
+        let mut out = Vec::with_capacity((input.len() as u64 * self.to / self.from) as usize + 1);
+        loop {
+            // Bornes exactes en arithmétique entière : indépendantes du découpage de l'entrée.
+            let start_abs = self.out_index * self.from / self.to;
+            let end_abs = ((self.out_index + 1) * self.from / self.to).max(start_abs + 1);
+            let start = (start_abs - self.carry_base) as usize;
+            let end = (end_abs - self.carry_base) as usize;
+            if end > self.carry.len() {
+                break;
+            }
+            let window = &self.carry[start..end];
+            out.push(window.iter().sum::<f32>() / window.len() as f32);
+            self.out_index += 1;
+        }
+        let next_start = (self.out_index * self.from / self.to - self.carry_base) as usize;
+        if next_start > 0 {
+            self.carry.drain(..next_start);
+            self.carry_base += next_start as u64;
+        }
+        out
+    }
+}
+
+pub fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
+    Resampler::new(from, to).push(input)
+}
+
+pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut cursor = Cursor::new(Vec::<u8>::with_capacity(44 + samples.len() * 2));
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).context("en-tête WAV")?;
+        for s in samples {
+            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+            writer.write_sample(v)?;
+        }
+        writer.finalize().context("finalisation WAV")?;
+    }
+    Ok(cursor.into_inner())
 }
 
 #[cfg(test)]
@@ -252,6 +332,21 @@ mod tests {
     }
 
     #[test]
+    fn incremental_resampling_matches_one_shot() {
+        let input: Vec<f32> = (0..44_100).map(|i| ((i as f32) * 0.01).sin()).collect();
+        let whole = resample(&input, 44_100, 16_000);
+        assert!((whole.len() as i64 - 16_000).abs() <= 1, "{}", whole.len());
+
+        let mut r = Resampler::new(44_100, 16_000);
+        let mut pieces = Vec::new();
+        for chunk in input.chunks(1_234) {
+            pieces.extend(r.push(chunk));
+        }
+        assert_eq!(pieces.len(), whole.len());
+        assert!(pieces.iter().zip(&whole).all(|(a, b)| (a - b).abs() < 1e-6));
+    }
+
+    #[test]
     fn wav_has_pcm16_mono_header() {
         let samples = vec![0.0f32, 0.5, -0.5, 1.0, -1.0];
         let wav = encode_wav(&samples, TARGET_SAMPLE_RATE).unwrap();
@@ -265,23 +360,4 @@ mod tests {
         let last = i16::from_le_bytes([wav[wav.len() - 2], wav[wav.len() - 1]]);
         assert_eq!(last, -32767);
     }
-}
-
-fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut cursor = Cursor::new(Vec::<u8>::with_capacity(44 + samples.len() * 2));
-    {
-        let mut writer = hound::WavWriter::new(&mut cursor, spec).context("en-tête WAV")?;
-        for s in samples {
-            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            writer.write_sample(v)?;
-        }
-        writer.finalize().context("finalisation WAV")?;
-    }
-    Ok(cursor.into_inner())
 }

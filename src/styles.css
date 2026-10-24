@@ -115,6 +115,15 @@ a { color: var(--accent-strong); }
 .status.processing .pill { background: rgba(109, 124, 255, .18); color: var(--accent-strong); }
 .status .msg { color: var(--text-muted); }
 .status .msg.error { color: var(--danger); }
+.status .msg.live {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  flex: 1;
+}
 .status kbd {
   font-family: inherit;
   background: var(--bg-hover);
