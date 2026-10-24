@@ -1,7 +1,7 @@
 // Bouton de téléchargement : dernière release GitHub.
 // Le dépôt est déduit de l'URL GitHub Pages (owner.github.io/repo) ; sinon, FALLBACK_REPO.
 (function () {
-  const FALLBACK_REPO = "overconsulting/dictae";
+  const FALLBACK_REPO = "ldandoy/dictae";
 
   function detectRepo() {
     const host = location.hostname.toLowerCase();
