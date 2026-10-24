@@ -79,7 +79,16 @@ impl LocalAsr {
 
     /// `samples` : PCM f32 mono 16 kHz. `language` : code ISO ou vide pour la détection.
     /// `context` : texte déjà transcrit juste avant (transcription en continu), ou vide.
-    pub fn transcribe(&self, path: &Path, samples: &[f32], language: &str, threads: u32, context: &str) -> Result<LocalTranscript> {
+    /// `terms` : vocabulaire personnel (« Dictae, Overconsulting »), ou vide.
+    pub fn transcribe(
+        &self,
+        path: &Path,
+        samples: &[f32],
+        language: &str,
+        threads: u32,
+        context: &str,
+        terms: &str,
+    ) -> Result<LocalTranscript> {
         let ctx = self.ensure_loaded(path)?;
         let started = Instant::now();
 
@@ -105,7 +114,7 @@ impl LocalAsr {
         params.set_print_timestamps(false);
         // Un amorçage ponctué incite le modèle à ponctuer lui aussi ; en continu, on y
         // ajoute la fin du texte précédent pour garder la cohérence entre segments.
-        let prompt = build_prompt(initial_prompt(lang), context);
+        let prompt = build_prompt(initial_prompt(lang), context, terms);
         if !prompt.is_empty() {
             params.set_initial_prompt(&prompt);
         }
@@ -162,9 +171,18 @@ fn initial_prompt(lang: &str) -> Option<&'static str> {
     }
 }
 
-/// Amorce = primer de langue + ~150 derniers caractères du contexte, sans octet nul.
-fn build_prompt(primer: Option<&str>, context: &str) -> String {
+/// Amorce = primer de langue + vocabulaire personnel + ~150 derniers caractères du
+/// contexte, sans octet nul. Le vocabulaire aide whisper à orthographier les noms propres.
+fn build_prompt(primer: Option<&str>, context: &str, terms: &str) -> String {
     let mut prompt = primer.unwrap_or("").to_string();
+    let terms = terms.trim().replace('\0', "");
+    if !terms.is_empty() {
+        if !prompt.is_empty() {
+            prompt.push(' ');
+        }
+        prompt.push_str(&terms);
+        prompt.push('.');
+    }
     let context = context.trim().replace('\0', "");
     if !context.is_empty() {
         let tail: String = {
@@ -229,12 +247,13 @@ mod tests {
 
     #[test]
     fn prompt_keeps_primer_and_context_tail() {
-        assert_eq!(build_prompt(None, ""), "");
-        assert_eq!(build_prompt(Some("Bonjour."), ""), "Bonjour.");
+        assert_eq!(build_prompt(None, "", ""), "");
+        assert_eq!(build_prompt(Some("Bonjour."), "", ""), "Bonjour.");
         let long = "x".repeat(400);
-        let p = build_prompt(Some("Bonjour."), &long);
+        let p = build_prompt(Some("Bonjour."), &long, "");
         assert_eq!(p.chars().count(), "Bonjour. ".chars().count() + 150);
-        assert_eq!(build_prompt(None, "fin\0 nulle"), "fin nulle");
+        assert_eq!(build_prompt(None, "fin\0 nulle", ""), "fin nulle");
+        assert_eq!(build_prompt(Some("Bonjour."), "suite", "Dictae, REA"), "Bonjour. Dictae, REA. suite");
     }
 
     /// Test réel sur la fixture TTS, sauté si aucun modèle n'est téléchargé.
@@ -262,7 +281,7 @@ mod tests {
             .collect();
 
         let asr = LocalAsr::new();
-        let t = asr.transcribe(&model, &samples, "fr", 0, "").unwrap();
+        let t = asr.transcribe(&model, &samples, "fr", 0, "", "Dictae").unwrap();
         eprintln!("[{}] {} ms → {:?}", model.display(), t.elapsed_ms, t.text);
         let lower = t.text.to_lowercase();
         assert!(lower.contains("bonjour"), "{lower}");
@@ -273,7 +292,7 @@ mod tests {
         let asr_for_engine = asr.clone();
         let model_for_engine = model.clone();
         let engine = move |seg: &[f32], context: &str| -> anyhow::Result<String> {
-            Ok(asr_for_engine.transcribe(&model_for_engine, seg, "fr", 0, context)?.text)
+            Ok(asr_for_engine.transcribe(&model_for_engine, seg, "fr", 0, context, "Dictae")?.text)
         };
         let chunks: Vec<Vec<f32>> = samples.chunks(TARGET_SAMPLE_RATE as usize / 10).map(|c| c.to_vec()).collect();
         let total = chunks.len();

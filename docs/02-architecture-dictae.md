@@ -132,6 +132,21 @@ Usage :
 L'historique garde application, titre de fenêtre et URL. Le tout se désactive dans les
 réglages (« Lire le contexte de saisie »).
 
+## Dictionnaire et snippets (24 octobre 2026)
+
+Table `vocabulary` (`vocab.rs`, page « Dictionnaire » du hub), trois types d'entrées :
+
+| Type | Effet |
+|---|---|
+| `term` | Nom propre ou jargon : injecté dans l'amorce whisper (160 caractères max, les plus utilisés d'abord) et listé dans le prompt Ollama (« à écrire exactement ainsi ») |
+| `replacement` | Phrase entendue → forme écrite, appliquée sur le brut avant la mise en forme (mots entiers, casse ignorée) ; la forme cible rejoint aussi les amorces |
+| `snippet` | Déclencheur dicté → texte inséré (multi-ligne), appliqué après la mise en forme pour résister aux retouches du modèle ; une ponctuation qui suivait le déclencheur est absorbée si le texte inséré finit par une ponctuation ou un saut de ligne |
+
+Les remplacements et snippets s'appliquent en une seule passe, la phrase la plus longue
+l'emportant à chaque position, sans re-analyser le texte déjà remplacé. Chaque usage
+incrémente un compteur qui ordonne les amorces. Le fournisseur API reçoit les termes dans
+le champ `prompt` de `/audio/transcriptions`.
+
 ## Choix et compromis
 
 - **ASR via API compatible OpenAI** en option : zéro infrastructure, et les presets

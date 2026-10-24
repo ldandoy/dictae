@@ -2,10 +2,12 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use rusqlite::{params, Connection};
 use serde::Serialize;
+
+use crate::vocab::{VocabEntry, VocabKind};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,7 +60,18 @@ impl Db {
                  window_title   TEXT,
                  url            TEXT
              );
-             CREATE INDEX IF NOT EXISTS history_created_at ON history(created_at DESC);",
+             CREATE INDEX IF NOT EXISTS history_created_at ON history(created_at DESC);
+             CREATE TABLE IF NOT EXISTS vocabulary (
+                 id          TEXT PRIMARY KEY,
+                 kind        TEXT NOT NULL,
+                 phrase      TEXT NOT NULL,
+                 target      TEXT NOT NULL DEFAULT '',
+                 note        TEXT NOT NULL DEFAULT '',
+                 uses        INTEGER NOT NULL DEFAULT 0,
+                 created_at  TEXT NOT NULL,
+                 updated_at  TEXT NOT NULL,
+                 UNIQUE(kind, phrase COLLATE NOCASE)
+             );",
         )
         .context("initialisation du schéma")?;
         migrate(&conn)?;
@@ -127,6 +140,90 @@ impl Db {
         self.conn.lock().execute("DELETE FROM history", [])?;
         Ok(())
     }
+
+    // ----- vocabulaire -------------------------------------------------------
+
+    pub fn vocab_list(&self) -> Result<Vec<VocabEntry>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, kind, phrase, target, note, uses, created_at, updated_at
+             FROM vocabulary ORDER BY kind, phrase COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let kind: String = r.get(1)?;
+            Ok(VocabEntry {
+                id: r.get(0)?,
+                kind: VocabKind::parse(&kind).unwrap_or(VocabKind::Term),
+                phrase: r.get(2)?,
+                target: r.get(3)?,
+                note: r.get(4)?,
+                uses: r.get(5)?,
+                created_at: r.get(6)?,
+                updated_at: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Crée ou met à jour une entrée (par identifiant). Refuse un doublon de phrase
+    /// pour le même type.
+    pub fn vocab_upsert(&self, e: &VocabEntry) -> Result<()> {
+        let phrase = e.phrase.trim();
+        if phrase.is_empty() {
+            return Err(anyhow!("la phrase est vide"));
+        }
+        if matches!(e.kind, VocabKind::Replacement | VocabKind::Snippet) && e.target.trim().is_empty() {
+            return Err(anyhow!("le texte de remplacement est vide"));
+        }
+        let conn = self.conn.lock();
+        let duplicate: Option<String> = conn
+            .query_row(
+                "SELECT id FROM vocabulary WHERE kind = ?1 AND phrase = ?2 COLLATE NOCASE AND id <> ?3",
+                params![e.kind.as_str(), phrase, e.id],
+                |r| r.get(0),
+            )
+            .ok();
+        if duplicate.is_some() {
+            return Err(anyhow!("« {phrase} » existe déjà dans cette catégorie"));
+        }
+        conn.execute(
+            "INSERT INTO vocabulary (id, kind, phrase, target, note, uses, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, phrase = excluded.phrase,
+                 target = excluded.target, note = excluded.note, updated_at = excluded.updated_at",
+            params![
+                e.id,
+                e.kind.as_str(),
+                phrase,
+                e.target,
+                e.note,
+                e.uses,
+                e.created_at,
+                e.updated_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn vocab_delete(&self, id: &str) -> Result<()> {
+        self.conn
+            .lock()
+            .execute("DELETE FROM vocabulary WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Incrémente le compteur d'utilisation des entrées données.
+    pub fn vocab_bump(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("UPDATE vocabulary SET uses = uses + 1 WHERE id = ?1")?;
+        for id in ids {
+            stmt.execute(params![id])?;
+        }
+        Ok(())
+    }
 }
 
 /// Ajoute les colonnes apparues après la première version du schéma.
@@ -181,6 +278,36 @@ mod tests {
         assert_eq!(db.list(10).unwrap()[0].id, "a");
         db.clear().unwrap();
         assert!(db.list(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn vocabulary_crud_and_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("v.sqlite")).unwrap();
+        let mk = |id: &str, kind: VocabKind, phrase: &str, target: &str| VocabEntry {
+            id: id.into(),
+            kind,
+            phrase: phrase.into(),
+            target: target.into(),
+            note: String::new(),
+            uses: 0,
+            created_at: "2026-10-24T00:00:00Z".into(),
+            updated_at: "2026-10-24T00:00:00Z".into(),
+        };
+        db.vocab_upsert(&mk("1", VocabKind::Term, "Dictae", "")).unwrap();
+        db.vocab_upsert(&mk("2", VocabKind::Replacement, "dicté", "Dictae")).unwrap();
+        assert!(db.vocab_upsert(&mk("3", VocabKind::Term, "dictae", "")).is_err(), "doublon insensible à la casse");
+        assert!(db.vocab_upsert(&mk("4", VocabKind::Snippet, "sig", "")).is_err(), "snippet sans texte");
+        assert!(db.vocab_upsert(&mk("5", VocabKind::Term, "  ", "")).is_err());
+        // mise à jour par id
+        db.vocab_upsert(&mk("2", VocabKind::Replacement, "dicté", "DICTAE")).unwrap();
+        let list = db.vocab_list().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list.iter().find(|e| e.id == "2").unwrap().target, "DICTAE");
+        db.vocab_bump(&["2".into(), "2".into()]).unwrap();
+        assert_eq!(db.vocab_list().unwrap().iter().find(|e| e.id == "2").unwrap().uses, 2);
+        db.vocab_delete("1").unwrap();
+        assert_eq!(db.vocab_list().unwrap().len(), 1);
     }
 
     #[test]

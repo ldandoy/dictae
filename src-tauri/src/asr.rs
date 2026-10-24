@@ -12,6 +12,8 @@ pub struct AsrConfig {
     pub api_key: String,
     pub model: String,
     pub language: String,
+    /// Amorce (vocabulaire personnel) transmise dans le champ `prompt`, ou vide.
+    pub prompt: String,
 }
 
 #[derive(Debug)]
@@ -44,6 +46,9 @@ pub async fn transcribe(client: &reqwest::Client, cfg: &AsrConfig, wav: Vec<u8>)
         .text("response_format", "json");
     if !cfg.language.trim().is_empty() {
         form = form.text("language", cfg.language.trim().to_string());
+    }
+    if !cfg.prompt.trim().is_empty() {
+        form = form.text("prompt", cfg.prompt.trim().to_string());
     }
 
     let mut request = client.post(&url).multipart(form);
@@ -124,6 +129,7 @@ mod tests {
             api_key: "sk-test".into(),
             model: "whisper-test".into(),
             language: "fr".into(),
+            prompt: "Dictae, REA".into(),
         }
     }
 
@@ -139,6 +145,8 @@ mod tests {
         assert!(request.contains("name=\"model\""));
         assert!(request.contains("whisper-test"));
         assert!(request.contains("name=\"language\""));
+        assert!(request.contains("name=\"prompt\""));
+        assert!(request.contains("Dictae, REA"));
         assert!(request.contains("filename=\"audio.wav\""));
     }
 

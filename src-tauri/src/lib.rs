@@ -11,6 +11,7 @@ mod models;
 mod paste;
 mod settings;
 mod stream;
+mod vocab;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use crate::dictation::{Dictation, StatePayload};
 use crate::local_asr::LocalAsr;
 use crate::models::ModelStatus;
 use crate::settings::Settings;
+use crate::vocab::VocabEntry;
 
 pub struct AppState {
     pub settings: RwLock<Settings>,
@@ -78,9 +80,39 @@ async fn test_asr(state: State<'_, AppState>) -> Result<String, String> {
             api_key: s.asr_api_key.clone(),
             model: s.asr_model.clone(),
             language: s.language.clone(),
+            prompt: String::new(),
         }
     };
     asr::probe(&state.http, &cfg).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn list_vocabulary(state: State<'_, AppState>) -> Result<Vec<VocabEntry>, String> {
+    state.db.vocab_list().map_err(|e| format!("{e:#}"))
+}
+
+/// Crée (id vide) ou met à jour une entrée de vocabulaire ; renvoie l'entrée enregistrée.
+#[tauri::command]
+fn save_vocabulary(state: State<'_, AppState>, mut entry: VocabEntry) -> Result<VocabEntry, String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    if entry.id.trim().is_empty() {
+        entry.id = uuid::Uuid::new_v4().to_string();
+        entry.created_at = now.clone();
+        entry.uses = 0;
+    }
+    entry.updated_at = now;
+    entry.phrase = entry.phrase.trim().to_string();
+    entry.note = entry.note.trim().to_string();
+    if entry.kind == vocab::VocabKind::Term {
+        entry.target = String::new();
+    }
+    state.db.vocab_upsert(&entry).map_err(|e| format!("{e:#}"))?;
+    Ok(entry)
+}
+
+#[tauri::command]
+fn delete_vocabulary(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.db.vocab_delete(&id).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -143,6 +175,7 @@ async fn test_format(state: State<'_, AppState>, sample: Option<String>) -> Resu
             model: s.ollama_model.clone(),
             instructions: s.format_instructions.clone(),
             context: None,
+            terms: state.db.vocab_list().map(|v| vocab::Vocabulary::new(v).terms_for_prompt(40)).unwrap_or_default(),
         }
     };
     let raw = sample.unwrap_or_else(|| {
@@ -375,6 +408,9 @@ pub fn run() {
             list_history,
             delete_history,
             clear_history,
+            list_vocabulary,
+            save_vocabulary,
+            delete_vocabulary,
             get_dictation_state,
             toggle_dictation,
             cancel_dictation,

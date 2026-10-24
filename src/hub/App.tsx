@@ -3,8 +3,9 @@ import { api, onDictationPartial, onDictationState, type DictationState, type Se
 import { HistoryPage } from "./HistoryPage";
 import { SettingsPage } from "./SettingsPage";
 import { AboutPage } from "./AboutPage";
+import { VocabularyPage } from "./VocabularyPage";
 
-type Page = "history" | "settings" | "about";
+type Page = "history" | "vocabulary" | "settings" | "about";
 
 export function App() {
   const [page, setPage] = useState<Page>("history");
@@ -33,6 +34,9 @@ export function App() {
         <button className={page === "history" ? "active" : ""} onClick={() => setPage("history")}>
           Historique
         </button>
+        <button className={page === "vocabulary" ? "active" : ""} onClick={() => setPage("vocabulary")}>
+          Dictionnaire
+        </button>
         <button className={page === "settings" ? "active" : ""} onClick={() => setPage("settings")}>
           Réglages
         </button>
@@ -44,6 +48,7 @@ export function App() {
       <main className="hub-main">
         <StatusBanner state={state} shortcut={settings?.shortcut ?? "…"} partial={partial} />
         {page === "history" && <HistoryPage />}
+        {page === "vocabulary" && <VocabularyPage />}
         {page === "settings" && (
           <SettingsPage
             onSaved={(s) => {

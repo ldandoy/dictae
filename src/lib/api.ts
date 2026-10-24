@@ -68,7 +68,23 @@ export interface HistoryEntry {
   url: string | null;
 }
 
+export type VocabKind = "term" | "replacement" | "snippet";
+
+export interface VocabEntry {
+  id: string;
+  kind: VocabKind;
+  phrase: string;
+  target: string;
+  note: string;
+  uses: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export const api = {
+  listVocabulary: () => invoke<VocabEntry[]>("list_vocabulary"),
+  saveVocabulary: (entry: VocabEntry) => invoke<VocabEntry>("save_vocabulary", { entry }),
+  deleteVocabulary: (id: string) => invoke<void>("delete_vocabulary", { id }),
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   testAsr: () => invoke<string>("test_asr"),

@@ -16,6 +16,8 @@ pub struct FormatConfig {
     pub instructions: String,
     /// Contexte d'insertion (application, texte autour du curseur), s'il a pu être lu.
     pub context: Option<InsertionContext>,
+    /// Termes du vocabulaire personnel à orthographier exactement ainsi.
+    pub terms: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -74,8 +76,14 @@ fn context_block(ctx: &InsertionContext) -> String {
     lines.join("\n")
 }
 
-fn system_prompt_with(instructions: &str, context: Option<&InsertionContext>) -> String {
+fn system_prompt_with(instructions: &str, context: Option<&InsertionContext>, terms: &[String]) -> String {
     let mut prompt = SYSTEM_PROMPT.to_string();
+    if !terms.is_empty() {
+        let list = terms.iter().map(|t| format!("« {t} »")).collect::<Vec<_>>().join(", ");
+        prompt.push_str(&format!(
+            "\n\nVocabulaire de l'utilisateur, à écrire exactement ainsi quand il apparaît : {list}."
+        ));
+    }
     if let Some(ctx) = context {
         prompt.push_str("\n\nContexte :\n");
         prompt.push_str(&context_block(ctx));
@@ -88,7 +96,7 @@ fn system_prompt_with(instructions: &str, context: Option<&InsertionContext>) ->
 }
 
 fn system_prompt(instructions: &str) -> String {
-    system_prompt_with(instructions, None)
+    system_prompt_with(instructions, None, &[])
 }
 
 /// Nettoie la réponse du modèle : balises de raisonnement, guillemets englobants, espaces.
@@ -141,7 +149,7 @@ pub async fn format_text(client: &reqwest::Client, cfg: &FormatConfig, raw: &str
         "keep_alive": "30m",
         "options": { "temperature": 0, "num_predict": raw.chars().count() * 2 + 64 },
         "messages": [
-            { "role": "system", "content": system_prompt_with(&cfg.instructions, cfg.context.as_ref()) },
+            { "role": "system", "content": system_prompt_with(&cfg.instructions, cfg.context.as_ref(), &cfg.terms) },
             { "role": "user", "content": raw }
         ]
     });
@@ -239,11 +247,12 @@ mod tests {
             readable: true,
             ..Default::default()
         };
-        let p = system_prompt_with("", Some(&ctx));
+        let p = system_prompt_with("", Some(&ctx), &["Dictae".into(), "REA".into()]);
         assert!(p.contains("« Slack »"), "{p}");
         assert!(p.contains("juste avant le point d'insertion : « Salut, je voulais te dire que »"), "{p}");
         assert!(!p.contains("Texte juste après"), "{p}");
-        let none = system_prompt_with("", Some(&InsertionContext { app: "Bloc-notes".into(), ..Default::default() }));
-        assert!(none.contains("Bloc-notes") && !none.contains("point d'insertion"));
+        assert!(p.contains("Vocabulaire de l'utilisateur, à écrire exactement ainsi quand il apparaît : « Dictae », « REA »."), "{p}");
+        let none = system_prompt_with("", Some(&InsertionContext { app: "Bloc-notes".into(), ..Default::default() }), &[]);
+        assert!(none.contains("Bloc-notes") && !none.contains("point d'insertion") && !none.contains("Vocabulaire"));
     }
 }

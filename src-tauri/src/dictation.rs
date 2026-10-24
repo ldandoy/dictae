@@ -22,7 +22,11 @@ use crate::models;
 use crate::paste;
 use crate::settings::Settings;
 use crate::stream::StreamSession;
+use crate::vocab::Vocabulary;
 use crate::AppState;
+
+/// Longueur maximale du vocabulaire injecté dans l'amorce whisper.
+const TERMS_HINT_CHARS: usize = 160;
 
 pub const EVENT_STATE: &str = "dictation://state";
 pub const EVENT_LEVEL: &str = "dictation://level";
@@ -152,6 +156,14 @@ impl Dictation {
         self.app
             .try_state::<AppState>()
             .map(|s| s.settings.read().clone())
+            .unwrap_or_default()
+    }
+
+    fn vocabulary(&self) -> Vocabulary {
+        self.app
+            .try_state::<AppState>()
+            .and_then(|s| s.db.vocab_list().ok())
+            .map(Vocabulary::new)
             .unwrap_or_default()
     }
 
@@ -313,6 +325,7 @@ impl Dictation {
     /// Fonction de transcription d'un segment pour le moteur configuré.
     fn segment_engine(&self, settings: &Settings) -> Option<Box<dyn Fn(&[f32], &str) -> Result<String> + Send + 'static>> {
         let app = self.app.clone();
+        let terms = self.vocabulary().terms_hint(TERMS_HINT_CHARS);
         if settings.uses_local_asr() {
             let state = app.state::<AppState>();
             let path = models::installed_path(&state.models_dir, &settings.local_model)?;
@@ -320,7 +333,10 @@ impl Dictation {
             let threads = settings.local_threads;
             Some(Box::new(move |samples: &[f32], context: &str| {
                 let state = app.state::<AppState>();
-                Ok(state.local_asr.transcribe(&path, samples, &language, threads, context)?.text)
+                Ok(state
+                    .local_asr
+                    .transcribe(&path, samples, &language, threads, context, &terms)?
+                    .text)
             }))
         } else {
             let cfg = AsrConfig {
@@ -328,6 +344,7 @@ impl Dictation {
                 api_key: settings.asr_api_key.clone(),
                 model: settings.asr_model.clone(),
                 language: settings.language.clone(),
+                prompt: terms,
             };
             Some(Box::new(move |samples: &[f32], _context: &str| {
                 let wav = audio::encode_wav(samples, audio::TARGET_SAMPLE_RATE)?;
@@ -405,6 +422,7 @@ impl Dictation {
     /// Transcrit l'enregistrement complet avec le moteur choisi (chemin sans flux).
     async fn transcribe_whole(&self, settings: &Settings, capture: Capture) -> Result<Transcribed> {
         let state = self.app.state::<AppState>();
+        let terms = self.vocabulary().terms_hint(TERMS_HINT_CHARS);
         if settings.uses_local_asr() {
             let model_id = settings.local_model.clone();
             let path = models::installed_path(&state.models_dir, &model_id)
@@ -415,7 +433,7 @@ impl Dictation {
             let app = self.app.clone();
             let result = tauri::async_runtime::spawn_blocking(move || {
                 let state = app.state::<AppState>();
-                state.local_asr.transcribe(&path, &samples, &language, threads, "")
+                state.local_asr.transcribe(&path, &samples, &language, threads, "", &terms)
             })
             .await
             .map_err(|e| anyhow!("tâche whisper interrompue : {e}"))??;
@@ -430,6 +448,7 @@ impl Dictation {
                 api_key: settings.asr_api_key.clone(),
                 model: settings.asr_model.clone(),
                 language: settings.language.clone(),
+                prompt: terms,
             };
             let t = asr::transcribe(&state.http, &cfg, capture.wav).await?;
             Ok(Transcribed {
@@ -536,6 +555,16 @@ impl Dictation {
         };
         entry.asr_text = raw.clone();
 
+        // Vocabulaire personnel : remplacements sur le brut, termes pour la mise en forme,
+        // snippets après la mise en forme.
+        let vocabulary = self.vocabulary();
+        let replaced = vocabulary.apply_replacements(&raw);
+        if !replaced.used_ids.is_empty() {
+            log::info!("{} remplacement(s) du dictionnaire appliqué(s)", replaced.used_ids.len());
+            let _ = state.db.vocab_bump(&replaced.used_ids);
+        }
+        let raw = replaced.text;
+
         if raw.is_empty() {
             entry.status = "empty".into();
             self.set_state(Phase::Idle, Mode::PushToTalk, Some("Rien entendu"), false);
@@ -552,6 +581,7 @@ impl Dictation {
                 model: settings.ollama_model.clone(),
                 instructions: settings.format_instructions.clone(),
                 context: ctx.clone(),
+                terms: vocabulary.terms_for_prompt(40),
             };
             match format::format_text(&state.http, &cfg, &raw).await {
                 Ok(f) => {
@@ -572,6 +602,15 @@ impl Dictation {
                 self.set_state(Phase::Idle, Mode::PushToTalk, None, false);
                 return;
             }
+        }
+
+        // Snippets : un déclencheur dicté est remplacé par son texte.
+        let expanded = vocabulary.apply_snippets(&final_text);
+        if !expanded.used_ids.is_empty() {
+            log::info!("{} snippet(s) inséré(s)", expanded.used_ids.len());
+            let _ = state.db.vocab_bump(&expanded.used_ids);
+            final_text = expanded.text;
+            entry.formatted_text = Some(final_text.clone());
         }
 
         // Espaces et majuscule initiale selon ce qui entoure le curseur.
