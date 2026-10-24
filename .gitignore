@@ -3,9 +3,9 @@ node_modules/
 dist/
 *.local
 
-# Rust / Tauri
-src-tauri/target/
-src-tauri/gen/schemas/
+# Rust / Tauri (app/)
+app/src-tauri/target/
+app/src-tauri/gen/schemas/
 
 # Env / secrets
 .env
