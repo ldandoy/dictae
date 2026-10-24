@@ -23,8 +23,10 @@ use parking_lot::{Mutex, RwLock};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WindowEvent};
+use serde::Serialize;
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_updater::UpdaterExt as _;
 
 /// Argument passé par le lancement automatique : démarrer réduit dans la zone de notification.
 const HIDDEN_ARG: &str = "--hidden";
@@ -97,6 +99,42 @@ async fn test_asr(state: State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 fn list_input_devices() -> Vec<String> {
     audio::list_input_devices()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub current_version: String,
+    pub available: Option<String>,
+    pub notes: Option<String>,
+}
+
+/// Interroge le point de mise à jour (GitHub Releases) sans rien installer.
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<UpdateInfo, String> {
+    let current_version = app.package_info().version.to_string();
+    let updater = app.updater().map_err(|e| format!("updater : {e}"))?;
+    let update = updater.check().await.map_err(|e| format!("vérification impossible : {e}"))?;
+    Ok(UpdateInfo {
+        current_version,
+        available: update.as_ref().map(|u| u.version.clone()),
+        notes: update.and_then(|u| u.body),
+    })
+}
+
+/// Télécharge et installe la mise à jour disponible, puis redémarre Dictae.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| format!("updater : {e}"))?;
+    let Some(update) = updater.check().await.map_err(|e| format!("vérification impossible : {e}"))? else {
+        return Err("aucune mise à jour disponible".into());
+    };
+    log::info!("installation de la mise à jour {}", update.version);
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("installation impossible : {e}"))?;
+    app.restart();
 }
 
 #[tauri::command]
@@ -358,6 +396,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::Builder::new().args([HIDDEN_ARG]).build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -442,6 +481,8 @@ pub fn run() {
             save_vocabulary,
             delete_vocabulary,
             list_input_devices,
+            check_update,
+            install_update,
             get_dictation_state,
             toggle_dictation,
             cancel_dictation,

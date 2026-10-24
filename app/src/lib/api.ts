@@ -84,7 +84,15 @@ export interface VocabEntry {
   updatedAt: string;
 }
 
+export interface UpdateInfo {
+  currentVersion: string;
+  available: string | null;
+  notes: string | null;
+}
+
 export const api = {
+  checkUpdate: () => invoke<UpdateInfo>("check_update"),
+  installUpdate: () => invoke<void>("install_update"),
   listInputDevices: () => invoke<string[]>("list_input_devices"),
   listVocabulary: () => invoke<VocabEntry[]>("list_vocabulary"),
   saveVocabulary: (entry: VocabEntry) => invoke<VocabEntry>("save_vocabulary", { entry }),

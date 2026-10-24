@@ -71,3 +71,31 @@ app/src-tauri/src/
 ```
 
 Données locales : `%APPDATA%\net.overconsulting.dictae\` (réglages, base SQLite, modèles).
+
+## Publier une version
+
+1. Monter le numéro de version dans `app/package.json`, `app/src-tauri/Cargo.toml` et
+   `app/src-tauri/tauri.conf.json`, commiter.
+2. Poser un tag et le pousser : `git tag v0.1.0 && git push origin main --tags`.
+3. L'action **Release** (`.github/workflows/release.yml`) construit l'installateur NSIS sur
+   un runner Windows, le signe pour l'updater et publie la Release GitHub avec `latest.json`.
+   Les installations existantes proposent la mise à jour (À propos › Vérifier les mises à jour).
+
+Secrets à créer une fois dans le dépôt (Settings › Secrets and variables › Actions) :
+
+| Secret | Valeur |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | contenu de `~/.tauri/dictae.key` (clé privée de l'updater, jamais commitée) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | vide (clé générée sans mot de passe) |
+
+La clé publique correspondante est dans `app/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) ;
+l'adresse du point de mise à jour (`plugins.updater.endpoints`) doit pointer vers le dépôt GitHub réel.
+
+## Le site (`web/`)
+
+Page statique (HTML, CSS, JS sans dépendance) publiée sur GitHub Pages par l'action **Pages**
+à chaque modification de `web/` (Settings › Pages › Source : GitHub Actions). Le bouton de
+téléchargement interroge l'API GitHub pour pointer vers l'installateur de la dernière Release ;
+le dépôt est déduit de l'URL `owner.github.io/repo`, avec un repli dans `web/script.js`.
+
+Aperçu local : `python -m http.server 4173 --directory web` puis http://localhost:4173.

@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dictae — dictée vocale locale pour Windows</title>
+    <meta
+      name="description"
+      content="Dictae transcrit votre voix et colle le texte dans n'importe quelle application Windows. Tout tourne sur votre machine : rien ne quitte votre ordinateur."
+    />
+    <meta property="og:title" content="Dictae — dictée vocale locale pour Windows" />
+    <meta property="og:description" content="Maintenez une touche, parlez, relâchez : le texte est collé. 100 % local." />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <a class="brand" href="#"><span class="dot"></span> Dictae</a>
+      <nav>
+        <a href="#fonctionnement">Fonctionnement</a>
+        <a href="#local">Local</a>
+        <a href="#faq">FAQ</a>
+        <a id="nav-repo" href="#" rel="noopener">Code source</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <h1>Dictez, relâchez, c'est écrit.</h1>
+        <p class="lead">
+          Dictae écoute pendant que vous maintenez une touche, transcrit votre voix sur votre machine et colle le texte
+          dans l'application où se trouve votre curseur. Mail, chat, éditeur de code, document : partout.
+        </p>
+        <div class="cta">
+          <a id="download" class="btn primary" href="#" rel="noopener">
+            Télécharger pour Windows
+            <small id="download-meta">dernière version…</small>
+          </a>
+          <a id="releases" class="btn" href="#" rel="noopener">Toutes les versions</a>
+        </div>
+        <p class="fine">Windows 10/11, 64 bits. Installateur par utilisateur, sans droits administrateur.</p>
+
+        <div class="demo" aria-hidden="true">
+          <div class="pill recording">
+            <span class="grip"></span>
+            <span class="dot-rec"></span>
+            <span class="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+            <span class="text">…voir demain à 14 h pour parler du projet</span>
+          </div>
+          <p class="demo-caption">La flow bar affiche le texte reconnu pendant que vous parlez.</p>
+        </div>
+      </section>
+
+      <section id="fonctionnement" class="features">
+        <h2>Comment ça marche</h2>
+        <div class="grid">
+          <article>
+            <h3>1. Une touche</h3>
+            <p>
+              Maintenez <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Espace</kbd> (modifiable) pour dicter. Un appui bref passe
+              en mode mains libres pour les longs passages.
+            </p>
+          </article>
+          <article>
+            <h3>2. Transcription en continu</h3>
+            <p>
+              Le son est découpé aux pauses et transcrit pendant que vous parlez par whisper.cpp, intégré à
+              l'application. Au relâchement, seule la fin reste à traiter.
+            </p>
+          </article>
+          <article>
+            <h3>3. Mise en forme</h3>
+            <p>
+              Un petit modèle de langue servi par Ollama corrige ponctuation, majuscules et hésitations, en tenant
+              compte de l'application et du texte autour du curseur.
+            </p>
+          </article>
+          <article>
+            <h3>4. Collage vérifié</h3>
+            <p>
+              Le texte est collé dans le champ actif, avec les bons espaces, puis relu pour confirmer qu'il est bien
+              arrivé. L'historique garde chaque dictée.
+            </p>
+          </article>
+          <article>
+            <h3>Dictionnaire</h3>
+            <p>
+              Vos noms propres et votre jargon sont soufflés au modèle. Des remplacements corrigent ce qui est mal
+              entendu, des snippets insèrent signature ou adresse à la voix.
+            </p>
+          </article>
+          <article>
+            <h3>Votre micro, vos réglages</h3>
+            <p>
+              Choix du micro, de la langue, du modèle (du plus rapide au plus précis), sons de retour, lancement avec
+              Windows. Mises à jour automatiques.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="local" class="local">
+        <h2>Tout reste sur votre ordinateur</h2>
+        <p>
+          Pas de compte, pas d'abonnement, pas d'envoi d'audio. La reconnaissance vocale tourne sur votre processeur,
+          la mise en forme sur votre carte graphique via Ollama, et l'historique est une base SQLite dans votre
+          dossier utilisateur. Vous pouvez tout supprimer en effaçant un dossier.
+        </p>
+        <ul>
+          <li><strong>Reconnaissance</strong> : whisper.cpp, modèles de 60 Mo à 574 Mo téléchargés depuis l'application.</li>
+          <li><strong>Mise en forme</strong> : facultative, avec le modèle Ollama de votre choix.</li>
+          <li><strong>Code source</strong> : ouvert, Rust + Tauri, à lire et à compiler soi-même.</li>
+        </ul>
+      </section>
+
+      <section id="faq" class="faq">
+        <h2>Questions fréquentes</h2>
+        <details>
+          <summary>Windows affiche un avertissement SmartScreen à l'installation</summary>
+          <p>
+            L'installateur n'est pas encore signé par un certificat d'éditeur. Cliquez sur « Informations
+            complémentaires » puis « Exécuter quand même ». Vous pouvez aussi vérifier le code source et compiler
+            Dictae vous-même.
+          </p>
+        </details>
+        <details>
+          <summary>Quel modèle choisir ?</summary>
+          <p>
+            <em>Small</em> est le bon départ : rapide sur un processeur récent, bonne qualité en français. <em>Large v3
+            Turbo</em> est plus précis mais plus lent sans accélération GPU. Le choix se change à tout moment dans les
+            réglages.
+          </p>
+        </details>
+        <details>
+          <summary>Ollama est-il obligatoire ?</summary>
+          <p>
+            Non. Sans Ollama, Dictae colle la transcription brute, déjà ponctuée par whisper. Avec Ollama et un petit
+            modèle comme <code>qwen3.5:4b</code>, la mise en forme devient nettement meilleure et prend moins d'une
+            seconde sur GPU.
+          </p>
+        </details>
+        <details>
+          <summary>Dans quelles applications ça marche ?</summary>
+          <p>
+            Partout où l'on peut coller du texte : navigateurs, messageries, suites bureautiques, éditeurs de code,
+            terminaux. La vérification du collage et le contexte de saisie dépendent du support de l'accessibilité
+            Windows par l'application.
+          </p>
+        </details>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        Dictae est développé par Overconsulting. <a id="footer-repo" href="#" rel="noopener">Code source et suivi des
+        problèmes sur GitHub</a>.
+      </p>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

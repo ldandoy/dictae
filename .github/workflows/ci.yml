@@ -1,0 +1,45 @@
+# Vérification continue : frontend (tsc + Vite) et tests Rust, sans bundle.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["app/**", ".github/workflows/ci.yml"]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Vérifier LLVM
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) { choco install llvm -y --no-progress }
+
+      - name: Frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Tests Rust
+        working-directory: app/src-tauri
+        run: cargo test --lib

@@ -1,0 +1,63 @@
+# Construit l'installateur Windows et publie une Release GitHub (avec latest.json pour
+# les mises à jour automatiques) à chaque tag de version, par exemple `v0.1.0`.
+#
+# Secrets requis dans le dépôt :
+#   TAURI_SIGNING_PRIVATE_KEY           contenu du fichier ~/.tauri/dictae.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  mot de passe de la clé (vide si générée avec --ci)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      # libclang (bindgen pour whisper.cpp). LLVM est préinstallé sur windows-latest ;
+      # on s'assure du chemin attendu par app/src-tauri/.cargo/config.toml.
+      - name: Vérifier LLVM
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) { choco install llvm -y --no-progress }
+          Get-Item "C:\Program Files\LLVM\bin\libclang.dll" | Select-Object FullName
+
+      - name: Dépendances npm
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseName: "Dictae ${{ github.ref_name }}"
+          releaseBody: "Installateur Windows (NSIS) et mise à jour automatique. Voir les notes ci-dessous."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          args: --bundles nsis
