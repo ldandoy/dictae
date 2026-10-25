@@ -74,6 +74,9 @@ export function AboutPage() {
           <button className="btn" onClick={check} disabled={busy}>
             Vérifier les mises à jour
           </button>
+          <button className="btn" onClick={() => api.setOnboardingCompleted(false)} disabled={busy}>
+            Revoir l'accueil
+          </button>
           {info?.available && (
             <button className="btn primary" onClick={install} disabled={busy}>
               Installer la version {info.available}

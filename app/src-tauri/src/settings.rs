@@ -54,6 +54,8 @@ pub struct Settings {
     pub mute_others: bool,
     /// Lancer Dictae (réduit dans la zone de notification) à l'ouverture de session.
     pub launch_at_login: bool,
+    /// L'accueil du premier lancement a été terminé (ou les modèles étaient déjà présents).
+    pub onboarding_completed: bool,
     /// Raccourci global push-to-talk, format `Ctrl+Shift+Space`.
     pub shortcut: String,
     /// Remettre le contenu précédent du presse-papiers après le collage.
@@ -89,6 +91,7 @@ impl Default for Settings {
             sounds_enabled: true,
             mute_others: true,
             launch_at_login: false,
+            onboarding_completed: false,
             shortcut: "Ctrl+Shift+Space".into(),
             restore_clipboard: true,
             paste_delay_ms: 60,

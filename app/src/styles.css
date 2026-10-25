@@ -294,6 +294,63 @@ a { color: var(--accent-strong); }
   transition: width .2s linear;
 }
 
+/* ---------- Accueil ---------- */
+
+.onboarding {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 36px 28px;
+  display: grid;
+  gap: 18px;
+}
+
+.onboarding-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+.steps { list-style: none; display: flex; gap: 6px; margin: 0; padding: 0; }
+.steps li {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.steps li.active { border-color: var(--accent); color: var(--text); }
+.steps li.done { color: var(--ok); }
+
+.onboarding-step h1 { font-size: 20px; margin: 0 0 6px; }
+.onboarding-step .sub { margin-bottom: 16px; }
+
+.onboarding-foot { text-align: right; }
+
+.meter {
+  height: 14px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin: 14px 0 6px;
+}
+.meter i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--ok), var(--accent));
+  transition: width .08s linear;
+}
+
+.try-area {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+  outline: none;
+  user-select: text;
+}
+.try-area:focus { border-color: var(--accent); }
+
 /* ---------- Dictionnaire ---------- */
 
 .vocab-form { display: grid; gap: 12px; max-width: 640px; margin-bottom: 24px; }

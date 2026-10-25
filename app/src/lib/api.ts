@@ -35,6 +35,7 @@ export interface Settings {
   soundsEnabled: boolean;
   muteOthers: boolean;
   launchAtLogin: boolean;
+  onboardingCompleted: boolean;
   shortcut: string;
   restoreClipboard: boolean;
   pasteDelayMs: number;
@@ -117,6 +118,9 @@ export interface UpdateInfo {
 export const api = {
   getAppInfo: () => invoke<AppInfo>("get_app_info"),
   llamaStatus: () => invoke<LlamaStatus>("llama_status"),
+  startMicTest: () => invoke<void>("start_mic_test"),
+  stopMicTest: () => invoke<void>("stop_mic_test"),
+  setOnboardingCompleted: (completed: boolean) => invoke<Settings>("set_onboarding_completed", { completed }),
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
   listInputDevices: () => invoke<string[]>("list_input_devices"),

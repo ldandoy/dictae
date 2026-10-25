@@ -119,6 +119,47 @@ async fn llama_status(state: State<'_, AppState>) -> Result<llama::LlamaStatus, 
     Ok(state.llama.status().await)
 }
 
+#[tauri::command]
+fn start_mic_test(state: State<'_, AppState>, dictation: State<'_, Arc<Dictation>>) -> Result<(), String> {
+    let device = state.settings.read().input_device.clone();
+    dictation.start_mic_test(&device).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn stop_mic_test(dictation: State<'_, Arc<Dictation>>) {
+    dictation.stop_mic_test();
+}
+
+/// Marque l'accueil comme terminé (ou le rouvre avec `completed = false`).
+#[tauri::command]
+fn set_onboarding_completed(app: AppHandle, state: State<'_, AppState>, completed: bool) -> Result<Settings, String> {
+    let mut settings = state.settings.read().clone();
+    settings.onboarding_completed = completed;
+    settings.save(&state.settings_path).map_err(|e| format!("{e:#}"))?;
+    *state.settings.write() = settings.clone();
+    let _ = app.emit("settings://changed", settings.clone());
+    Ok(settings)
+}
+
+/// Les anciens utilisateurs qui ont déjà leurs modèles n'ont pas besoin de l'accueil.
+fn autocomplete_onboarding(state: &AppState) {
+    let mut settings = state.settings.write();
+    if settings.onboarding_completed {
+        return;
+    }
+    let whisper_ok = models::installed_path(&state.models_dir, &settings.local_model).is_some();
+    let llm_ok = !settings.format_enabled
+        || !settings.uses_llama()
+        || models::installed_path(&state.models_dir, &settings.llm_model).is_some();
+    if whisper_ok && llm_ok {
+        settings.onboarding_completed = true;
+        if let Err(e) = settings.save(&state.settings_path) {
+            log::warn!("enregistrement des réglages : {e:#}");
+        }
+        log::info!("accueil considéré comme terminé : modèles déjà présents");
+    }
+}
+
 /// Démarre le serveur llama.cpp en arrière-plan si la mise en forme intégrée est active
 /// et son modèle présent, pour que la première dictée n'attende pas le chargement.
 fn prestart_llama(app: &AppHandle) {
@@ -550,6 +591,8 @@ pub fn run() {
                 downloading: Mutex::new(Vec::new()),
             });
 
+            autocomplete_onboarding(&app.state::<AppState>());
+
             let recorder = Recorder::spawn();
             let dictation = Dictation::new(app.handle().clone(), recorder);
             app.manage(dictation);
@@ -596,6 +639,9 @@ pub fn run() {
             delete_vocabulary,
             list_input_devices,
             llama_status,
+            start_mic_test,
+            stop_mic_test,
+            set_onboarding_completed,
             get_app_info,
             check_update,
             install_update,

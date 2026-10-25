@@ -4,6 +4,8 @@ import { HistoryPage } from "./HistoryPage";
 import { SettingsPage } from "./SettingsPage";
 import { AboutPage } from "./AboutPage";
 import { VocabularyPage } from "./VocabularyPage";
+import { OnboardingPage } from "./OnboardingPage";
+import { onSettingsChanged } from "../lib/api";
 
 type Page = "history" | "vocabulary" | "settings" | "about";
 
@@ -22,8 +24,13 @@ export function App() {
       if (s.phase === "idle") setPartial("");
     }).then((u) => unlisteners.push(u));
     onDictationPartial(setPartial).then((u) => unlisteners.push(u));
+    onSettingsChanged(setSettings).then((u) => unlisteners.push(u));
     return () => unlisteners.forEach((u) => u());
   }, []);
+
+  if (settings && !settings.onboardingCompleted) {
+    return <OnboardingPage settings={settings} onDone={setSettings} />;
+  }
 
   return (
     <div className="hub">

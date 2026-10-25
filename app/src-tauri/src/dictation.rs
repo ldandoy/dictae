@@ -94,6 +94,8 @@ struct Inner {
     context_task: Option<std::thread::JoinHandle<Option<InsertionContext>>>,
     /// Sessions audio coupées pendant l'enregistrement (à rétablir).
     ducked: Option<std::thread::JoinHandle<Vec<String>>>,
+    /// Le micro est ouvert pour le test de l'accueil, pas pour une dictée.
+    mic_test: bool,
 }
 
 pub struct Dictation {
@@ -124,6 +126,7 @@ impl Dictation {
                 stream: None,
                 context_task: None,
                 ducked: None,
+                mic_test: false,
             }),
         })
     }
@@ -175,6 +178,11 @@ impl Dictation {
     // ----- déclencheurs -------------------------------------------------
 
     pub fn on_shortcut_pressed(self: &Arc<Self>) {
+        if self.inner.lock().mic_test {
+            // Le raccourci pendant le test du micro le termine simplement.
+            self.stop_mic_test();
+            return;
+        }
         let (phase, mode) = {
             let g = self.inner.lock();
             (g.phase, g.mode)
@@ -212,8 +220,48 @@ impl Dictation {
         }
     }
 
+    /// Test du micro (accueil) : ouvre le micro et diffuse le niveau, sans transcription.
+    pub fn start_mic_test(self: &Arc<Self>, device: &str) -> Result<()> {
+        {
+            let g = self.inner.lock();
+            if g.phase != Phase::Idle {
+                return Err(anyhow!("une dictée est en cours"));
+            }
+        }
+        self.recorder.start(device)?;
+        {
+            let mut g = self.inner.lock();
+            g.phase = Phase::Recording;
+            g.mode = Mode::HandsFree;
+            g.message = Some("Test du micro".into());
+            g.error = false;
+            g.generation += 1;
+            g.mic_test = true;
+        }
+        self.emit_state();
+        self.spawn_level_loop();
+        Ok(())
+    }
+
+    pub fn stop_mic_test(self: &Arc<Self>) {
+        let was_test = {
+            let mut g = self.inner.lock();
+            let t = g.mic_test;
+            g.mic_test = false;
+            t
+        };
+        if was_test {
+            let _ = self.recorder.stop();
+            self.set_state(Phase::Idle, Mode::PushToTalk, None, false);
+        }
+    }
+
     /// Clic sur la flow bar ou bouton du hub.
     pub fn toggle(self: &Arc<Self>) {
+        if self.inner.lock().mic_test {
+            self.stop_mic_test();
+            return;
+        }
         let phase = self.inner.lock().phase;
         match phase {
             Phase::Idle => self.begin(Mode::HandsFree),
@@ -223,6 +271,10 @@ impl Dictation {
     }
 
     pub fn cancel(self: &Arc<Self>) {
+        if self.inner.lock().mic_test {
+            self.stop_mic_test();
+            return;
+        }
         let (phase, stream) = {
             let mut g = self.inner.lock();
             g.generation += 1;
