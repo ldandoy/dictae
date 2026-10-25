@@ -1,8 +1,13 @@
-import { useState } from "react";
-import { api, type UpdateInfo } from "../lib/api";
+import { useEffect, useState } from "react";
+import { api, type AppInfo, type UpdateInfo } from "../lib/api";
 
 export function AboutPage() {
+  const [app, setApp] = useState<AppInfo | null>(null);
   const [info, setInfo] = useState<UpdateInfo | null>(null);
+
+  useEffect(() => {
+    api.getAppInfo().then(setApp).catch(() => undefined);
+  }, []);
   const [status, setStatus] = useState<{ kind: "ok" | "bad" | ""; text: string }>({ kind: "", text: "" });
   const [busy, setBusy] = useState(false);
 
@@ -38,7 +43,23 @@ export function AboutPage() {
   return (
     <>
       <h1>À propos</h1>
-      <p className="sub">Dictae — dictée vocale système pour Windows, 100 % locale.</p>
+      <p className="sub">Dictae {app?.version ?? ""} — dictée vocale système pour Windows, 100 % locale.</p>
+      {app && (
+        <div className="card" style={{ maxWidth: 560, display: "grid", gap: 6, marginBottom: 12, fontSize: 13 }}>
+          <div>
+            <span className="muted">Version : </span>
+            <strong>{app.version}</strong>
+            <span className="muted"> · moteur whisper : {app.whisperBackends.join(" + ")}</span>
+          </div>
+          <div>
+            <span className="muted">Modèle chargé : </span>
+            {app.loadedModel ?? "aucun"}
+          </div>
+          <div className="muted" style={{ userSelect: "text" }}>Programme : {app.exePath}</div>
+          <div className="muted" style={{ userSelect: "text" }}>Données : {app.dataDir}</div>
+          <div className="muted" style={{ userSelect: "text" }}>Journal : {app.logPath}</div>
+        </div>
+      )}
       <div className="card" style={{ maxWidth: 560, display: "grid", gap: 10 }}>
         <p style={{ margin: 0 }}>
           Dictae écoute le micro pendant que vous maintenez le raccourci, transcrit avec whisper.cpp sur votre

@@ -86,6 +86,15 @@ export interface VocabEntry {
   updatedAt: string;
 }
 
+export interface AppInfo {
+  version: string;
+  exePath: string;
+  dataDir: string;
+  logPath: string;
+  whisperBackends: string[];
+  loadedModel: string | null;
+}
+
 export interface UpdateInfo {
   currentVersion: string;
   available: string | null;
@@ -93,6 +102,7 @@ export interface UpdateInfo {
 }
 
 export const api = {
+  getAppInfo: () => invoke<AppInfo>("get_app_info"),
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
   listInputDevices: () => invoke<string[]>("list_input_devices"),

@@ -60,9 +60,14 @@ windows = { version = "0.62", features = [
 
 # Backend Vulkan (GPU) : nécessite le SDK Vulkan (VULKAN_SDK) à la compilation ;
 # à l'exécution, whisper.cpp retombe sur le CPU si aucun GPU Vulkan n'est disponible.
+# `cargo build --no-default-features` donne un binaire CPU seul.
+[features]
+default = ["gpu-vulkan"]
+gpu-vulkan = ["whisper-rs/vulkan"]
+
 [dependencies.whisper-rs]
 version = "0.16"
-features = ["log_backend", "vulkan"]
+features = ["log_backend"]
 
 [dependencies.futures-util]
 version = "0.3"

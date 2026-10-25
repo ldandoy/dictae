@@ -106,6 +106,43 @@ fn list_input_devices() -> Vec<String> {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AppInfo {
+    pub version: String,
+    pub exe_path: String,
+    pub data_dir: String,
+    pub log_path: String,
+    /// Backends ggml compilés dans ce binaire (whisper.cpp).
+    pub whisper_backends: Vec<String>,
+    /// Modèle whisper chargé en mémoire, s'il y en a un.
+    pub loaded_model: Option<String>,
+}
+
+#[tauri::command]
+fn get_app_info(app: AppHandle, state: State<'_, AppState>) -> AppInfo {
+    let log_path = app
+        .path()
+        .app_log_dir()
+        .map(|d| d.join("Dictae.log").display().to_string())
+        .unwrap_or_default();
+    AppInfo {
+        version: app.package_info().version.to_string(),
+        exe_path: std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(),
+        data_dir: state.settings_path.parent().map(|p| p.display().to_string()).unwrap_or_default(),
+        log_path,
+        whisper_backends: vec![
+            "CPU".into(),
+            #[cfg(feature = "gpu-vulkan")]
+            "Vulkan".into(),
+        ],
+        loaded_model: state
+            .local_asr
+            .loaded_path()
+            .and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned())),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
     pub current_version: String,
     pub available: Option<String>,
@@ -346,7 +383,7 @@ fn setup_tray(app: &AppHandle) -> Result<()> {
         .context("icône d'application absente")?;
     TrayIconBuilder::with_id("dictae-tray")
         .icon(icon)
-        .tooltip("Dictae")
+        .tooltip(format!("Dictae {}", app.package_info().version))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -484,6 +521,7 @@ pub fn run() {
             save_vocabulary,
             delete_vocabulary,
             list_input_devices,
+            get_app_info,
             check_update,
             install_update,
             get_dictation_state,
