@@ -18,7 +18,7 @@ use crate::audio::{self, Capture, Recorder};
 use crate::context::{self, InsertionContext, Verification};
 use crate::db::HistoryEntry;
 use crate::ducking;
-use crate::format::{self, FormatConfig};
+use crate::format::{self, FormatConfig, FormatEndpoint};
 use crate::models;
 use crate::paste;
 use crate::settings::Settings;
@@ -519,6 +519,23 @@ impl Dictation {
         }
     }
 
+    /// Point de mise en forme selon les réglages : llama.cpp intégré (démarré si besoin) ou Ollama.
+    async fn format_endpoint(&self, settings: &Settings) -> Result<FormatEndpoint> {
+        if settings.uses_llama() {
+            let state = self.app.state::<AppState>();
+            let model_id = settings.llm_model.clone();
+            let path = models::installed_path(&state.models_dir, &model_id)
+                .ok_or_else(|| anyhow!("modèle de mise en forme « {model_id} » non téléchargé : ouvrez Réglages › Mise en forme"))?;
+            let port = state.llama.ensure_running(&path, settings.local_gpu).await?;
+            Ok(FormatEndpoint::LlamaServer { port })
+        } else {
+            Ok(FormatEndpoint::Ollama {
+                base_url: settings.ollama_base_url.clone(),
+                model: settings.ollama_model.clone(),
+            })
+        }
+    }
+
     /// Termine le flux (transcription de la fin) ; `None` si aucun flux ou s'il a échoué.
     async fn finish_stream(&self, settings: &Settings, stream: Option<Arc<StreamSession>>) -> Option<Transcribed> {
         let stream = stream?;
@@ -635,20 +652,26 @@ impl Dictation {
 
         // Mise en forme optionnelle par Ollama ; en cas d'échec on colle le texte brut.
         let mut final_text = raw.clone();
-        if settings.format_enabled && !settings.ollama_model.trim().is_empty() {
+        if settings.format_enabled {
             self.set_state(Phase::Processing, Mode::PushToTalk, Some("Mise en forme…"), false);
-            let cfg = FormatConfig {
-                base_url: settings.ollama_base_url.clone(),
-                model: settings.ollama_model.clone(),
-                instructions: settings.format_instructions.clone(),
-                context: ctx.clone(),
-                terms: vocabulary.terms_for_prompt(40),
+            let endpoint = self.format_endpoint(&settings).await;
+            let formatted = match endpoint {
+                Ok(endpoint) => {
+                    let cfg = FormatConfig {
+                        endpoint,
+                        instructions: settings.format_instructions.clone(),
+                        context: ctx.clone(),
+                        terms: vocabulary.terms_for_prompt(40),
+                    };
+                    format::format_text(&state.http, &cfg, &raw).await.map(|f| (f, cfg.endpoint.label()))
+                }
+                Err(e) => Err(e),
             };
-            match format::format_text(&state.http, &cfg, &raw).await {
-                Ok(f) => {
-                    log::info!("mise en forme par {} en {} ms", cfg.model, f.elapsed_ms);
+            match formatted {
+                Ok((f, label)) => {
+                    log::info!("mise en forme par {label} en {} ms", f.elapsed_ms);
                     entry.latency_ms += f.elapsed_ms as i64;
-                    entry.model = format!("{} + {}", entry.model, cfg.model);
+                    entry.model = format!("{} + {label}", entry.model);
                     if f.text != raw {
                         entry.formatted_text = Some(f.text.clone());
                         final_text = f.text;

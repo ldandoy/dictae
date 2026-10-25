@@ -1,21 +1,30 @@
-//! Catalogue et téléchargement des modèles whisper.cpp (format GGML, dépôt
-//! `ggerganov/whisper.cpp` sur Hugging Face).
+//! Catalogue et téléchargement des modèles : whisper.cpp (GGML, dépôt
+//! `ggerganov/whisper.cpp`) et modèles de langue pour la mise en forme (GGUF, llama.cpp).
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use futures_util::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 
 pub const EVENT_PROGRESS: &str = "models://progress";
-const BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const WHISPER_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    Whisper,
+    Llm,
+}
 
 pub struct ModelInfo {
     pub id: &'static str,
+    pub kind: ModelKind,
     pub label: &'static str,
     pub file: &'static str,
+    pub url: &'static str,
     pub bytes: u64,
     pub note: &'static str,
 }
@@ -24,31 +33,57 @@ pub struct ModelInfo {
 pub const MODELS: &[ModelInfo] = &[
     ModelInfo {
         id: "large-v3-turbo-q5_0",
+        kind: ModelKind::Whisper,
         label: "Large v3 Turbo (q5_0)",
         file: "ggml-large-v3-turbo-q5_0.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
         bytes: 574_041_195,
         note: "Meilleure qualité ; recommandé avec GPU (≈ 0,25 s), sur CPU ≈ 1,5× la durée de la dictée",
     },
     ModelInfo {
         id: "medium-q5_0",
+        kind: ModelKind::Whisper,
         label: "Medium (q5_0)",
         file: "ggml-medium-q5_0.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
         bytes: 539_212_467,
         note: "Très bonne qualité, lent sur CPU",
     },
     ModelInfo {
         id: "small-q5_1",
+        kind: ModelKind::Whisper,
         label: "Small (q5_1)",
         file: "ggml-small-q5_1.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
         bytes: 190_085_487,
         note: "Recommandé sans GPU : ≈ 0,4× la durée de la dictée sur CPU, bonne qualité",
     },
     ModelInfo {
         id: "base-q5_1",
+        kind: ModelKind::Whisper,
         label: "Base (q5_1)",
         file: "ggml-base-q5_1.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
         bytes: 59_707_625,
         note: "Très rapide, qualité limitée en français",
+    },
+    ModelInfo {
+        id: "qwen3.5-4b-q4_k_m",
+        kind: ModelKind::Llm,
+        label: "Qwen3.5 4B (Q4_K_M)",
+        file: "Qwen3.5-4B-Q4_K_M.gguf",
+        url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+        bytes: 2_740_937_888,
+        note: "Recommandé : excellente mise en forme, ≈ 3 Go de VRAM",
+    },
+    ModelInfo {
+        id: "qwen3.5-2b-q4_k_m",
+        kind: ModelKind::Llm,
+        label: "Qwen3.5 2B (Q4_K_M)",
+        file: "Qwen3.5-2B-Q4_K_M.gguf",
+        url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
+        bytes: 1_280_835_840,
+        note: "Plus léger (≈ 1,5 Go de VRAM), mise en forme correcte",
     },
 ];
 
@@ -56,6 +91,7 @@ pub const MODELS: &[ModelInfo] = &[
 #[serde(rename_all = "camelCase")]
 pub struct ModelStatus {
     pub id: String,
+    pub kind: ModelKind,
     pub label: String,
     pub file: String,
     pub bytes: u64,
@@ -99,6 +135,7 @@ pub fn statuses(models_dir: &Path, downloading: &[String]) -> Vec<ModelStatus> {
         .iter()
         .map(|m| ModelStatus {
             id: m.id.into(),
+            kind: m.kind,
             label: m.label.into(),
             file: m.file.into(),
             bytes: m.bytes,
@@ -124,7 +161,8 @@ pub async fn download(app: &AppHandle, client: &reqwest::Client, models_dir: &Pa
     tokio::fs::create_dir_all(models_dir).await.context("création du dossier des modèles")?;
     let final_path = file_path(models_dir, info);
     let part_path = models_dir.join(format!("{}.part", info.file));
-    let url = format!("{BASE_URL}/{}", info.file);
+    let url = info.url;
+    let _ = WHISPER_BASE_URL;
 
     let emit = |received: u64, done: bool, error: Option<String>| {
         let _ = app.emit(
@@ -141,7 +179,7 @@ pub async fn download(app: &AppHandle, client: &reqwest::Client, models_dir: &Pa
 
     let result: Result<()> = async {
         let response = client
-            .get(&url)
+            .get(url)
             .send()
             .await
             .with_context(|| format!("connexion à {url}"))?;

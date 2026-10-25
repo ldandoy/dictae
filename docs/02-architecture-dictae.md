@@ -175,6 +175,25 @@ le champ `prompt` de `/audio/transcriptions`.
   sans élévation) et un MSI dans `src-tauri/target/release/bundle/`. Le binaire n'est pas
   signé : SmartScreen avertira au premier lancement.
 
+## Mise en forme intégrée : llama.cpp (25 octobre 2026, 0.2.0)
+
+Pour ne plus dépendre d'un Ollama installé à côté, Dictae embarque **llama-server**
+(build Vulkan officiel de llama.cpp, récupéré par `app/scripts/fetch-llama.mjs` dans
+`src-tauri/resources/llama/`, ≈ 66 Mo, livré comme ressource de l'installateur).
+
+- `llama.rs` lance le serveur comme processus enfant à la demande (`--host 127.0.0.1`,
+  port libre, `--no-webui`, `-ngl all` ou `0` selon le réglage GPU, `-c 4096`,
+  `--reasoning off` et `enable_thinking=false` pour Qwen3), attend `/health`, le relance si
+  le modèle ou le mode change, et l'arrête à la sortie (`RunEvent::Exit`).
+- Pourquoi un processus et non la crate `llama-cpp-2` en interne : whisper-rs embarque déjà
+  son propre ggml statique ; deux ggml de versions différentes dans un binaire = conflits de
+  symboles à l'édition de liens. Le processus isole aussi un plantage du pilote GPU.
+- `format.rs` parle les deux API : `/api/chat` d'Ollama (toujours disponible en option) et
+  `/v1/chat/completions` de llama-server (format OpenAI).
+- Catalogue (`models.rs`, kind `llm`) : Qwen3.5 4B Q4_K_M (2,7 Go, recommandé) et 2B.
+- Mesures RTX 3080, Qwen3.5 4B : première requête ≈ 22 s (pipelines Vulkan), puis ≈ 0,25 s ;
+  d'où le préchauffage au démarrage (`prestart_llama` + `warm_up`). Serveur prêt en 7 s.
+
 ## Choix et compromis
 
 - **ASR via API compatible OpenAI** en option : zéro infrastructure, et les presets

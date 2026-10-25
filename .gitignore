@@ -17,3 +17,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# llama.cpp (llama-server) récupéré par app/scripts/fetch-llama.mjs
+app/src-tauri/resources/llama/

@@ -7,6 +7,7 @@ mod db;
 mod dictation;
 mod ducking;
 mod format;
+mod llama;
 mod local_asr;
 mod models;
 mod paste;
@@ -47,6 +48,8 @@ pub struct AppState {
     pub db: Db,
     pub http: reqwest::Client,
     pub local_asr: LocalAsr,
+    /// Serveur llama.cpp intégré pour la mise en forme.
+    pub llama: llama::LlamaServer,
     /// Identifiants des modèles en cours de téléchargement.
     pub downloading: Mutex<Vec<String>>,
 }
@@ -80,6 +83,13 @@ fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings)
     {
         preload_local_model(&app);
     }
+    if settings.format_enabled != previous.format_enabled
+        || settings.format_provider != previous.format_provider
+        || settings.llm_model != previous.llm_model
+        || settings.local_gpu != previous.local_gpu
+    {
+        prestart_llama(&app);
+    }
     let _ = app.emit("settings://changed", settings);
     Ok(())
 }
@@ -102,6 +112,39 @@ async fn test_asr(state: State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 fn list_input_devices() -> Vec<String> {
     audio::list_input_devices()
+}
+
+#[tauri::command]
+async fn llama_status(state: State<'_, AppState>) -> Result<llama::LlamaStatus, String> {
+    Ok(state.llama.status().await)
+}
+
+/// Démarre le serveur llama.cpp en arrière-plan si la mise en forme intégrée est active
+/// et son modèle présent, pour que la première dictée n'attende pas le chargement.
+fn prestart_llama(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let (enabled, id, gpu) = {
+            let s = state.settings.read();
+            (s.format_enabled && s.uses_llama(), s.llm_model.clone(), s.local_gpu)
+        };
+        if !enabled {
+            state.llama.stop().await;
+            return;
+        }
+        match models::installed_path(&state.models_dir, &id) {
+            Some(path) => match state.llama.ensure_running(&path, gpu).await {
+                Ok(port) => {
+                    if let Err(e) = state.llama.warm_up(port).await {
+                        log::warn!("{e:#}");
+                    }
+                }
+                Err(e) => log::error!("démarrage de llama-server impossible : {e:#}"),
+            },
+            None => log::warn!("modèle de mise en forme « {id} » absent : à télécharger dans Réglages"),
+        }
+    });
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -230,8 +273,15 @@ fn download_local_model(app: AppHandle, state: State<'_, AppState>, id: String) 
         match result {
             Ok(path) => {
                 log::info!("modèle téléchargé : {}", path.display());
-                if state.settings.read().local_model == id {
+                let (whisper_id, llm_id) = {
+                    let s = state.settings.read();
+                    (s.local_model.clone(), s.llm_model.clone())
+                };
+                if whisper_id == id {
                     preload_local_model(&app_for_task);
+                }
+                if llm_id == id {
+                    prestart_llama(&app_for_task);
                 }
             }
             Err(e) => log::error!("téléchargement de {id} impossible : {e:#}"),
@@ -259,15 +309,27 @@ async fn list_ollama_models(state: State<'_, AppState>, base_url: Option<String>
 /// Passe un exemple dans le modèle de mise en forme et renvoie le résultat.
 #[tauri::command]
 async fn test_format(state: State<'_, AppState>, sample: Option<String>) -> Result<String, String> {
-    let cfg = {
-        let s = state.settings.read();
-        format::FormatConfig {
-            base_url: s.ollama_base_url.clone(),
-            model: s.ollama_model.clone(),
-            instructions: s.format_instructions.clone(),
-            context: None,
-            terms: state.db.vocab_list().map(|v| vocab::Vocabulary::new(v).terms_for_prompt(40)).unwrap_or_default(),
+    let settings = state.settings.read().clone();
+    let endpoint = if settings.uses_llama() {
+        let path = models::installed_path(&state.models_dir, &settings.llm_model)
+            .ok_or_else(|| format!("modèle « {} » non téléchargé", settings.llm_model))?;
+        let port = state
+            .llama
+            .ensure_running(&path, settings.local_gpu)
+            .await
+            .map_err(|e| format!("{e:#}"))?;
+        format::FormatEndpoint::LlamaServer { port }
+    } else {
+        format::FormatEndpoint::Ollama {
+            base_url: settings.ollama_base_url.clone(),
+            model: settings.ollama_model.clone(),
         }
+    };
+    let cfg = format::FormatConfig {
+        endpoint,
+        instructions: settings.format_instructions.clone(),
+        context: None,
+        terms: state.db.vocab_list().map(|v| vocab::Vocabulary::new(v).terms_for_prompt(40)).unwrap_or_default(),
     };
     let raw = sample.unwrap_or_else(|| {
         "bonjour euh je voulais savoir si on pouvait se voir demain à quatorze heures pour parler du projet merci".into()
@@ -467,6 +529,16 @@ pub fn run() {
                 .build()?;
 
             let shortcut_spec = settings.shortcut.clone();
+            let llama_exe = app
+                .path()
+                .resolve("resources/llama/llama-server.exe", tauri::path::BaseDirectory::Resource)
+                .unwrap_or_else(|_| PathBuf::from("llama-server.exe"));
+            log::info!(
+                "llama-server : {} ({})",
+                llama_exe.display(),
+                if llama_exe.is_file() { "présent" } else { "absent" }
+            );
+            let llama = llama::LlamaServer::new(llama_exe, http.clone());
             app.manage(AppState {
                 settings: RwLock::new(settings),
                 settings_path,
@@ -474,6 +546,7 @@ pub fn run() {
                 db,
                 http,
                 local_asr: LocalAsr::new(),
+                llama,
                 downloading: Mutex::new(Vec::new()),
             });
 
@@ -489,6 +562,7 @@ pub fn run() {
             }
             position_flowbar(app.handle());
             preload_local_model(app.handle());
+            prestart_llama(app.handle());
             if std::env::args().any(|a| a == HIDDEN_ARG) {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.hide();
@@ -521,6 +595,7 @@ pub fn run() {
             save_vocabulary,
             delete_vocabulary,
             list_input_devices,
+            llama_status,
             get_app_info,
             check_update,
             install_update,
@@ -529,6 +604,14 @@ pub fn run() {
             cancel_dictation,
             show_hub,
         ])
-        .run(tauri::generate_context!())
-        .expect("erreur au lancement de Dictae");
+        .build(tauri::generate_context!())
+        .expect("erreur au lancement de Dictae")
+        .run(|app, event| {
+            // Arrêter le serveur llama.cpp avec l'application, quel que soit le chemin de sortie.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.llama.stop_blocking();
+                }
+            }
+        });
 }

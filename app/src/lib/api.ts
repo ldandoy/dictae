@@ -25,6 +25,8 @@ export interface Settings {
   asrModel: string;
   language: string;
   formatEnabled: boolean;
+  formatProvider: "llama" | "ollama";
+  llmModel: string;
   ollamaBaseUrl: string;
   ollamaModel: string;
   formatInstructions: string;
@@ -39,8 +41,11 @@ export interface Settings {
   handsFreeTapMs: number;
 }
 
+export type ModelKind = "whisper" | "llm";
+
 export interface ModelStatus {
   id: string;
+  kind: ModelKind;
   label: string;
   file: string;
   bytes: number;
@@ -95,6 +100,14 @@ export interface AppInfo {
   loadedModel: string | null;
 }
 
+export interface LlamaStatus {
+  available: boolean;
+  running: boolean;
+  model: string | null;
+  port: number | null;
+  exePath: string;
+}
+
 export interface UpdateInfo {
   currentVersion: string;
   available: string | null;
@@ -103,6 +116,7 @@ export interface UpdateInfo {
 
 export const api = {
   getAppInfo: () => invoke<AppInfo>("get_app_info"),
+  llamaStatus: () => invoke<LlamaStatus>("llama_status"),
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
   listInputDevices: () => invoke<string[]>("list_input_devices"),

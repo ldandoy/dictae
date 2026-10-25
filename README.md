@@ -22,7 +22,8 @@ docs/   analyse de référence de Wispr Flow et architecture de Dictae
 - SDK Vulkan de LunarG (`winget install KhronosGroup.VulkanSDK`) pour le backend GPU de
   whisper.cpp ; la version est fixée dans `app/src-tauri/.cargo/config.toml` (`VULKAN_SDK`)
 - WebView2 (présent sur Windows 11)
-- Ollama avec un petit modèle pour la mise en forme (`ollama pull qwen3.5:4b`), facultatif
+- Ollama, facultatif : la mise en forme utilise par défaut le llama.cpp intégré (llama-server,
+  téléchargé par `app/scripts/fetch-llama.mjs` avant chaque `tauri dev` / `tauri build`)
 
 Le dossier de build Rust est `C:\dt` (réglé dans `.cargo/config.toml`) : les chemins de
 compilation des shaders Vulkan dépassent sinon la limite Windows de 260 caractères.

@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { api, onModelProgress, type ModelProgress, type ModelStatus, type Settings } from "../lib/api";
+import {
+  api,
+  onModelProgress,
+  type LlamaStatus,
+  type ModelKind,
+  type ModelProgress,
+  type ModelStatus,
+  type Settings,
+} from "../lib/api";
 
 const PRESETS: { label: string; baseUrl: string; model: string }[] = [
   { label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini-transcribe" },
@@ -127,7 +135,7 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
           </div>
 
           {s.asrProvider !== "openai" ? (
-            <LocalModels selected={s.localModel} onSelect={(id) => set("localModel", id)} />
+            <LocalModels kind="whisper" selected={s.localModel} onSelect={(id) => set("localModel", id)} />
           ) : (
             <>
               <div className="presets">
@@ -227,7 +235,7 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
         </div>
 
         <div className="card" style={{ display: "grid", gap: 12 }}>
-          <strong>Mise en forme du texte (Ollama)</strong>
+          <strong>Mise en forme du texte</strong>
           <div className="field check">
             <input
               id="fmt"
@@ -236,18 +244,47 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
               onChange={(e) => set("formatEnabled", e.target.checked)}
             />
             <label htmlFor="fmt">
-              Corriger ponctuation, majuscules et hésitations avec un modèle Ollama avant de coller
+              Corriger ponctuation, majuscules et hésitations avec un modèle de langue avant de coller
             </label>
           </div>
-          <div className="field">
-            <label>URL d'Ollama</label>
-            <input type="text" value={s.ollamaBaseUrl} onChange={(e) => set("ollamaBaseUrl", e.target.value)} />
+          <div className="row">
+            <label className="radio">
+              <input
+                type="radio"
+                name="fmt-provider"
+                checked={s.formatProvider !== "ollama"}
+                onChange={() => set("formatProvider", "llama")}
+              />
+              Intégré (llama.cpp, dans Dictae, recommandé)
+            </label>
+            <label className="radio">
+              <input
+                type="radio"
+                name="fmt-provider"
+                checked={s.formatProvider === "ollama"}
+                onChange={() => set("formatProvider", "ollama")}
+              />
+              Ollama (serveur externe)
+            </label>
           </div>
-          <OllamaModelPicker
-            baseUrl={s.ollamaBaseUrl}
-            value={s.ollamaModel}
-            onChange={(m) => set("ollamaModel", m)}
-          />
+          {s.formatProvider !== "ollama" ? (
+            <>
+              <LocalModels kind="llm" selected={s.llmModel} onSelect={(id) => set("llmModel", id)} />
+              <LlamaStatusLine />
+            </>
+          ) : (
+            <>
+              <div className="field">
+                <label>URL d'Ollama</label>
+                <input type="text" value={s.ollamaBaseUrl} onChange={(e) => set("ollamaBaseUrl", e.target.value)} />
+              </div>
+              <OllamaModelPicker
+                baseUrl={s.ollamaBaseUrl}
+                value={s.ollamaModel}
+                onChange={(m) => set("ollamaModel", m)}
+              />
+            </>
+          )}
           <div className="field">
             <label>Consignes supplémentaires (facultatif)</label>
             <textarea
@@ -340,12 +377,41 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
   );
 }
 
-function LocalModels({ selected, onSelect }: { selected: string; onSelect: (id: string) => void }) {
+function LlamaStatusLine() {
+  const [status, setStatus] = useState<LlamaStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const tick = () => api.llamaStatus().then((s) => alive && setStatus(s)).catch(() => undefined);
+    tick();
+    const id = setInterval(tick, 3000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+  if (!status) return null;
+  if (!status.available) {
+    return <div className="toast bad">Le serveur llama.cpp n'est pas livré avec cette installation ({status.exePath}).</div>;
+  }
+  return (
+    <div className="hint">
+      {status.running
+        ? `Serveur llama.cpp en marche (${status.model ?? "modèle"}, port ${status.port}).`
+        : "Serveur llama.cpp arrêté : il démarre au lancement de Dictae ou à la première dictée."}
+    </div>
+  );
+}
+
+function LocalModels({ kind, selected, onSelect }: { kind: ModelKind; selected: string; onSelect: (id: string) => void }) {
   const [models, setModels] = useState<ModelStatus[]>([]);
   const [progress, setProgress] = useState<Record<string, ModelProgress>>({});
   const [error, setError] = useState<string>("");
 
-  const reload = () => api.listLocalModels().then(setModels).catch((e) => setError(String(e)));
+  const reload = () =>
+    api
+      .listLocalModels()
+      .then((list) => setModels(list.filter((m) => m.kind === kind)))
+      .catch((e) => setError(String(e)));
 
   useEffect(() => {
     reload();
@@ -385,7 +451,7 @@ function LocalModels({ selected, onSelect }: { selected: string; onSelect: (id: 
         return (
           <div key={m.id} className={`model ${isSelected ? "selected" : ""}`}>
             <label className="radio">
-              <input type="radio" name="localModel" checked={isSelected} onChange={() => onSelect(m.id)} />
+              <input type="radio" name={`model-${kind}`} checked={isSelected} onChange={() => onSelect(m.id)} />
               <span>
                 <strong>{m.label}</strong>
                 <span className="muted"> · {fmtBytes(m.bytes)} · {m.note}</span>
@@ -413,8 +479,9 @@ function LocalModels({ selected, onSelect }: { selected: string; onSelect: (id: 
         );
       })}
       <div className="hint">
-        Modèles whisper.cpp (GGML) téléchargés depuis Hugging Face dans le dossier de données de Dictae. Le modèle
-        sélectionné est chargé en mémoire au démarrage.
+        {kind === "whisper"
+          ? "Modèles whisper.cpp (GGML) téléchargés depuis Hugging Face dans le dossier de données de Dictae. Le modèle sélectionné est chargé en mémoire au démarrage."
+          : "Modèles de langue (GGUF) téléchargés depuis Hugging Face, servis par le llama.cpp intégré. Le modèle sélectionné est chargé sur la carte graphique au démarrage."}
       </div>
       {error && <div className="toast bad">{error}</div>}
     </div>

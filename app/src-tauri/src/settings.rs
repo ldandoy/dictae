@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 pub const PROVIDER_LOCAL: &str = "local";
 pub const PROVIDER_OPENAI: &str = "openai";
+pub const PROVIDER_LLAMA: &str = "llama";
+pub const PROVIDER_OLLAMA: &str = "ollama";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -30,8 +32,12 @@ pub struct Settings {
     /// Code ISO 639-1 (`fr`, `en`…) ou chaîne vide pour la détection automatique.
     pub language: String,
 
-    /// Mise en forme du texte (ponctuation, majuscules) par un modèle Ollama.
+    /// Mise en forme du texte (ponctuation, majuscules) par un modèle de langue.
     pub format_enabled: bool,
+    /// `llama` (llama.cpp intégré) ou `ollama` (serveur Ollama externe).
+    pub format_provider: String,
+    /// Identifiant du modèle GGUF pour llama.cpp (voir `models::MODELS`, kind `llm`).
+    pub llm_model: String,
     pub ollama_base_url: String,
     pub ollama_model: String,
     /// Consignes supplémentaires ajoutées au prompt de mise en forme.
@@ -73,6 +79,8 @@ impl Default for Settings {
             asr_model: "gpt-4o-mini-transcribe".into(),
             language: "fr".into(),
             format_enabled: true,
+            format_provider: PROVIDER_LLAMA.into(),
+            llm_model: "qwen3.5-4b-q4_k_m".into(),
             ollama_base_url: "http://127.0.0.1:11434".into(),
             ollama_model: "qwen3.5:4b".into(),
             format_instructions: String::new(),
@@ -92,6 +100,11 @@ impl Default for Settings {
 impl Settings {
     pub fn uses_local_asr(&self) -> bool {
         self.asr_provider != PROVIDER_OPENAI
+    }
+
+    /// Mise en forme par le llama.cpp intégré (sinon Ollama).
+    pub fn uses_llama(&self) -> bool {
+        self.format_provider != PROVIDER_OLLAMA
     }
 
     pub fn load(path: &Path) -> Self {

@@ -9,10 +9,27 @@ use serde_json::json;
 
 use crate::context::InsertionContext;
 
+/// Où envoyer la demande de mise en forme.
+#[derive(Debug, Clone)]
+pub enum FormatEndpoint {
+    /// Serveur Ollama (`POST {base_url}/api/chat`).
+    Ollama { base_url: String, model: String },
+    /// llama-server intégré (`POST http://127.0.0.1:{port}/v1/chat/completions`).
+    LlamaServer { port: u16 },
+}
+
+impl FormatEndpoint {
+    pub fn label(&self) -> String {
+        match self {
+            FormatEndpoint::Ollama { model, .. } => format!("ollama:{model}"),
+            FormatEndpoint::LlamaServer { .. } => "llama.cpp".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FormatConfig {
-    pub base_url: String,
-    pub model: String,
+    pub endpoint: FormatEndpoint,
     pub instructions: String,
     /// Contexte d'insertion (application, texte autour du curseur), s'il a pu être lu.
     pub context: Option<InsertionContext>,
@@ -138,52 +155,98 @@ pub async fn format_text(client: &reqwest::Client, cfg: &FormatConfig, raw: &str
     if raw.is_empty() {
         return Ok(Formatted { text: String::new(), elapsed_ms: 0 });
     }
-    if cfg.model.trim().is_empty() {
-        bail!("aucun modèle Ollama sélectionné");
-    }
-    let url = format!("{}/api/chat", cfg.base_url.trim_end_matches('/'));
     let started = Instant::now();
-    let body = json!({
-        "model": cfg.model,
-        "stream": false,
-        "think": false,
-        "keep_alive": "30m",
-        "options": { "temperature": 0, "num_predict": raw.chars().count() * 2 + 64 },
-        "messages": [
-            { "role": "system", "content": system_prompt_with(&cfg.instructions, cfg.context.as_ref(), &cfg.terms) },
-            { "role": "user", "content": raw }
-        ]
-    });
-    let response = client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .with_context(|| format!("connexion à Ollama ({url})"))?;
-    let status = response.status();
-    let text = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        bail!("Ollama HTTP {} : {}", status.as_u16(), text.chars().take(300).collect::<String>());
-    }
+    let system = system_prompt_with(&cfg.instructions, cfg.context.as_ref(), &cfg.terms);
+    let max_tokens = raw.chars().count() * 2 + 64;
+    let content = match &cfg.endpoint {
+        FormatEndpoint::Ollama { base_url, model } => {
+            if model.trim().is_empty() {
+                bail!("aucun modèle Ollama sélectionné");
+            }
+            let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+            let body = json!({
+                "model": model,
+                "stream": false,
+                "think": false,
+                "keep_alive": "30m",
+                "options": { "temperature": 0, "num_predict": max_tokens },
+                "messages": [
+                    { "role": "system", "content": system },
+                    { "role": "user", "content": raw }
+                ]
+            });
+            let text = post_json(client, &url, &body, "Ollama").await?;
+            #[derive(Deserialize)]
+            struct Message {
+                content: String,
+            }
+            #[derive(Deserialize)]
+            struct ChatResponse {
+                message: Message,
+            }
+            let parsed: ChatResponse = serde_json::from_str(&text)
+                .with_context(|| format!("réponse Ollama inattendue : {}", text.chars().take(200).collect::<String>()))?;
+            parsed.message.content
+        }
+        FormatEndpoint::LlamaServer { port } => {
+            let url = format!("http://127.0.0.1:{port}/v1/chat/completions");
+            let body = json!({
+                "model": "dictae",
+                "stream": false,
+                "temperature": 0,
+                "max_tokens": max_tokens,
+                "chat_template_kwargs": { "enable_thinking": false },
+                "messages": [
+                    { "role": "system", "content": system },
+                    { "role": "user", "content": raw }
+                ]
+            });
+            let text = post_json(client, &url, &body, "llama.cpp").await?;
+            #[derive(Deserialize)]
+            struct Message {
+                content: Option<String>,
+            }
+            #[derive(Deserialize)]
+            struct Choice {
+                message: Message,
+            }
+            #[derive(Deserialize)]
+            struct ChatResponse {
+                choices: Vec<Choice>,
+            }
+            let parsed: ChatResponse = serde_json::from_str(&text)
+                .with_context(|| format!("réponse llama.cpp inattendue : {}", text.chars().take(200).collect::<String>()))?;
+            parsed
+                .choices
+                .into_iter()
+                .next()
+                .and_then(|c| c.message.content)
+                .unwrap_or_default()
+        }
+    };
 
-    #[derive(Deserialize)]
-    struct Message {
-        content: String,
-    }
-    #[derive(Deserialize)]
-    struct ChatResponse {
-        message: Message,
-    }
-    let parsed: ChatResponse =
-        serde_json::from_str(&text).with_context(|| format!("réponse Ollama inattendue : {}", text.chars().take(200).collect::<String>()))?;
-
-    let cleaned = clean_response(&parsed.message.content);
+    let cleaned = clean_response(&content);
     let elapsed_ms = started.elapsed().as_millis() as u64;
     if !looks_plausible(raw, &cleaned) {
         log::warn!("mise en forme ignorée (réponse implausible) : {cleaned:?}");
         return Ok(Formatted { text: raw.to_string(), elapsed_ms });
     }
     Ok(Formatted { text: cleaned, elapsed_ms })
+}
+
+async fn post_json(client: &reqwest::Client, url: &str, body: &serde_json::Value, who: &str) -> Result<String> {
+    let response = client
+        .post(url)
+        .json(body)
+        .send()
+        .await
+        .with_context(|| format!("connexion à {who} ({url})"))?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        bail!("{who} HTTP {} : {}", status.as_u16(), text.chars().take(300).collect::<String>());
+    }
+    Ok(text)
 }
 
 /// Modèles disponibles sur le serveur Ollama (`GET /api/tags`).
