@@ -35,11 +35,27 @@ jobs:
         run: |
           if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) { choco install llvm -y --no-progress }
 
-      - name: SDK Vulkan
-        uses: humbletim/install-vulkan-sdk@v1.2
+      - name: Cache du SDK Vulkan
+        id: vulkan-cache
+        uses: actions/cache@v4
         with:
-          version: latest
-          cache: true
+          path: C:\VulkanSDK\1.4.363.0
+          key: vulkan-sdk-1.4.363.0-windows
+
+      - name: SDK Vulkan
+        if: steps.vulkan-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/1.4.363.0/windows/vulkansdk-windows-X64-1.4.363.0.exe"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\vulkan-sdk.exe"
+          Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList "--accept-licenses","--default-answer","--confirm-command","install" -Wait -NoNewWindow
+          Get-Item "C:\VulkanSDK\1.4.363.0\Lib\vulkan-1.lib","C:\VulkanSDK\1.4.363.0\Bin\glslc.exe" | Select-Object FullName
+
+      - name: Variables Vulkan
+        shell: pwsh
+        run: |
+          "VULKAN_SDK=C:\VulkanSDK\1.4.363.0" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "C:\VulkanSDK\1.4.363.0\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Frontend
         run: |
