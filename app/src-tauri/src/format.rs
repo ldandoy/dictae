@@ -95,6 +95,7 @@ fn system_prompt_with(instructions: &str, context: Option<&InsertionContext>, te
     prompt
 }
 
+#[cfg(test)]
 fn system_prompt(instructions: &str) -> String {
     system_prompt_with(instructions, None, &[])
 }

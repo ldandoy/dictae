@@ -1,6 +1,6 @@
 [package]
 name = "dictae"
-version = "0.1.0"
+version = "0.1.1"
 description = "Dictée vocale système pour Windows"
 authors = ["Overconsulting"]
 edition = "2021"

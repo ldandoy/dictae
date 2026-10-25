@@ -198,6 +198,8 @@ fn is_word_char(c: char) -> bool {
 /// Remplace chaque occurrence de `phrase` (insensible à la casse, mots entiers) par
 /// `target`. Si `target` se termine par une ponctuation ou un saut de ligne, une
 /// ponctuation qui suivait immédiatement l'occurrence est absorbée.
+/// Version mono-phrase, utilisée par les tests ; le pipeline passe par `Vocabulary::apply`.
+#[cfg(test)]
 pub fn replace_phrase_ci(text: &str, phrase: &str, target: &str) -> (String, usize) {
     let hay: Vec<char> = text.chars().collect();
     let needle: Vec<char> = phrase.chars().map(fold).collect();
