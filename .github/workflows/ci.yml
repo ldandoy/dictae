@@ -62,6 +62,11 @@ jobs:
           npm ci
           npm run build
 
+      # Le build script de Tauri refuse un glob de ressources vide : il faut les
+      # binaires llama.cpp (comme avant chaque `tauri dev` / `tauri build`).
+      - name: Ressources llama.cpp
+        run: node scripts/fetch-llama.mjs
+
       - name: Tests Rust
         working-directory: app/src-tauri
         run: cargo test --lib
