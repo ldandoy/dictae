@@ -153,6 +153,11 @@ le champ `prompt` de `/audio/transcriptions`.
   défaut de Windows, repli sur le défaut si le micro choisi disparaît.
 - **Sons** : quatre signaux courts synthétisés à la volée (`sounds.rs`, WAV 16 kHz en
   mémoire) joués par `PlaySound` en asynchrone : début, fin, collé, erreur. Désactivables.
+- **Silence des autres applications** (`ducking.rs`) : au début de l'enregistrement, les
+  sessions audio Core Audio du périphérique de sortie par défaut (musique, vidéos, jeux…)
+  sont coupées, sauf les sons système, notre propre processus et les sessions déjà
+  muettes ; elles sont rétablies dès l'arrêt du micro. Attention : `IsSystemSoundsSession`
+  renvoie S_OK ou S_FALSE, il faut comparer à S_OK et non tester `is_ok()`.
 - **Lancement à l'ouverture de session** : plugin `autostart` avec l'argument `--hidden`,
   qui démarre l'app réduite dans la zone de notification (hub caché, flow bar visible).
 - **Installateur** : `npm run tauri build` produit un installateur NSIS (par utilisateur,

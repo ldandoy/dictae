@@ -42,6 +42,8 @@ pub struct Settings {
     pub input_device: String,
     /// Sons de début / fin de dictée.
     pub sounds_enabled: bool,
+    /// Couper le son des autres applications pendant l'enregistrement.
+    pub mute_others: bool,
     /// Lancer Dictae (réduit dans la zone de notification) à l'ouverture de session.
     pub launch_at_login: bool,
     /// Raccourci global push-to-talk, format `Ctrl+Shift+Space`.
@@ -73,6 +75,7 @@ impl Default for Settings {
             context_enabled: true,
             input_device: String::new(),
             sounds_enabled: true,
+            mute_others: true,
             launch_at_login: false,
             shortcut: "Ctrl+Shift+Space".into(),
             restore_clipboard: true,

@@ -5,6 +5,7 @@ mod audio;
 mod context;
 mod db;
 mod dictation;
+mod ducking;
 mod format;
 mod local_asr;
 mod models;

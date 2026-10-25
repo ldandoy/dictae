@@ -30,6 +30,7 @@ export interface Settings {
   contextEnabled: boolean;
   inputDevice: string;
   soundsEnabled: boolean;
+  muteOthers: boolean;
   launchAtLogin: boolean;
   shortcut: string;
   restoreClipboard: boolean;

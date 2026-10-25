@@ -17,6 +17,7 @@ use crate::asr::{self, AsrConfig};
 use crate::audio::{self, Capture, Recorder};
 use crate::context::{self, InsertionContext, Verification};
 use crate::db::HistoryEntry;
+use crate::ducking;
 use crate::format::{self, FormatConfig};
 use crate::models;
 use crate::paste;
@@ -91,6 +92,8 @@ struct Inner {
     stream: Option<Arc<StreamSession>>,
     /// Lecture du contexte de saisie lancée au début de la dictée.
     context_task: Option<std::thread::JoinHandle<Option<InsertionContext>>>,
+    /// Sessions audio coupées pendant l'enregistrement (à rétablir).
+    ducked: Option<std::thread::JoinHandle<Vec<String>>>,
 }
 
 pub struct Dictation {
@@ -120,6 +123,7 @@ impl Dictation {
                 pressed_at: None,
                 stream: None,
                 context_task: None,
+                ducked: None,
             }),
         })
     }
@@ -234,6 +238,7 @@ impl Dictation {
                 log::warn!("arrêt du micro à l'annulation : {e}");
             }
         }
+        self.restore_others();
         self.set_state(Phase::Idle, Mode::PushToTalk, Some("Annulé"), false);
         self.clear_message_later(Duration::from_millis(1500));
     }
@@ -246,6 +251,46 @@ impl Dictation {
         }
     }
 
+    /// Coupe le son des autres applications (en arrière-plan) si le réglage est actif.
+    fn duck_others(&self) {
+        if !self.settings().mute_others {
+            return;
+        }
+        let task = std::thread::Builder::new()
+            .name("dictae-ducking".into())
+            .spawn(|| match ducking::mute_others() {
+                Ok(ids) => {
+                    if !ids.is_empty() {
+                        log::info!("{} session(s) audio coupée(s) pendant la dictée", ids.len());
+                    }
+                    ids
+                }
+                Err(e) => {
+                    log::warn!("coupure du son des autres applications impossible : {e:#}");
+                    Vec::new()
+                }
+            })
+            .ok();
+        self.inner.lock().ducked = task;
+    }
+
+    /// Rétablit le son coupé par `duck_others`, sans bloquer l'appelant.
+    fn restore_others(&self) {
+        let Some(task) = self.inner.lock().ducked.take() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let ids = task.join().unwrap_or_default();
+            if ids.is_empty() {
+                return;
+            }
+            match ducking::restore(&ids) {
+                Ok(n) => log::info!("{n} session(s) audio rétablie(s)"),
+                Err(e) => log::warn!("rétablissement du son impossible : {e:#}"),
+            }
+        });
+    }
+
     fn begin(self: &Arc<Self>, mode: Mode) {
         let device = self.settings().input_device;
         match self.recorder.start(&device) {
@@ -256,6 +301,7 @@ impl Dictation {
                 };
                 self.play(Sound::Start);
                 self.set_state(Phase::Recording, mode, Some(msg), false);
+                self.duck_others();
                 self.spawn_level_loop();
                 self.start_context_capture();
                 self.start_stream();
@@ -390,6 +436,7 @@ impl Dictation {
         };
         self.play(Sound::Stop);
         self.set_state(Phase::Processing, mode, Some("Transcription…"), false);
+        self.restore_others();
 
         let capture = match self.recorder.stop() {
             Ok(c) => c,

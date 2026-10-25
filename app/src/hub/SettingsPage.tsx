@@ -83,6 +83,17 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
           </div>
           <div className="field check">
             <input
+              id="mute-others"
+              type="checkbox"
+              checked={s.muteOthers}
+              onChange={(e) => set("muteOthers", e.target.checked)}
+            />
+            <label htmlFor="mute-others">
+              Couper le son des autres applications pendant l'enregistrement (musique, vidéos), rétabli ensuite
+            </label>
+          </div>
+          <div className="field check">
+            <input
               id="autostart"
               type="checkbox"
               checked={s.launchAtLogin}
