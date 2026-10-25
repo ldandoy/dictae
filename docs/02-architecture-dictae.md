@@ -194,6 +194,15 @@ Pour ne plus dépendre d'un Ollama installé à côté, Dictae embarque **llama-
 - Mesures RTX 3080, Qwen3.5 4B : première requête ≈ 22 s (pipelines Vulkan), puis ≈ 0,25 s ;
   d'où le préchauffage au démarrage (`prestart_llama` + `warm_up`). Serveur prêt en 7 s.
 
+## Accueil du premier lancement (0.2.1)
+
+`OnboardingPage` remplace le hub tant que `onboardingCompleted` est faux : (1) téléchargement
+en un clic des modèles sélectionnés dans les réglages (whisper + LLM) avec progression,
+(2) choix du micro et test de niveau en direct (`start_mic_test` ouvre le micro sans
+transcription), (3) premier essai du raccourci dans une zone de texte du hub, confirmé par
+`dictation://result`. Au démarrage, si les modèles sont déjà présents, l'accueil est marqué
+terminé (utilisateurs existants) ; « Revoir l'accueil » dans À propos le rouvre.
+
 ## Choix et compromis
 
 - **ASR via API compatible OpenAI** en option : zéro infrastructure, et les presets
