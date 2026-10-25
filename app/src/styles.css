@@ -178,6 +178,7 @@ a { color: var(--accent-strong); }
 .chip.ok { color: var(--ok); }
 .chip.bad { color: var(--danger); }
 .chip.warn { color: var(--warn); }
+.chip.accent { color: var(--accent); }
 
 .empty-state {
   color: var(--text-muted);

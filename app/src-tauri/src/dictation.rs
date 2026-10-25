@@ -4,6 +4,10 @@
 //! commandes depuis le hub. Les transitions sont diffusées aux fenêtres par événements.
 //! Pendant l'enregistrement, une `StreamSession` transcrit les segments au fil de l'eau ;
 //! au relâchement il ne reste que la fin à traiter.
+//!
+//! Second raccourci : la réécriture. Le texte sélectionné dans l'application est lu
+//! (UI Automation, sinon Ctrl+C), l'utilisateur dicte une consigne (ou rien), le modèle
+//! de langue réécrit la sélection et le résultat la remplace.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -61,6 +65,8 @@ pub struct StatePayload {
     pub message: Option<String>,
     pub error: bool,
     pub generation: u64,
+    /// L'enregistrement en cours est une consigne de réécriture, pas une dictée.
+    pub polish: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,6 +102,8 @@ struct Inner {
     ducked: Option<std::thread::JoinHandle<Vec<String>>>,
     /// Le micro est ouvert pour le test de l'accueil, pas pour une dictée.
     mic_test: bool,
+    /// Réécriture de la sélection (second raccourci) plutôt que dictée.
+    polish: bool,
 }
 
 pub struct Dictation {
@@ -127,6 +135,7 @@ impl Dictation {
                 context_task: None,
                 ducked: None,
                 mic_test: false,
+                polish: false,
             }),
         })
     }
@@ -139,6 +148,7 @@ impl Dictation {
             message: g.message.clone(),
             error: g.error,
             generation: g.generation,
+            polish: g.polish,
         }
     }
 
@@ -178,6 +188,19 @@ impl Dictation {
     // ----- déclencheurs -------------------------------------------------
 
     pub fn on_shortcut_pressed(self: &Arc<Self>) {
+        self.pressed(false);
+    }
+
+    /// Raccourci de réécriture : même mécanique (maintenir / appui bref) sur le texte sélectionné.
+    pub fn on_polish_pressed(self: &Arc<Self>) {
+        self.pressed(true);
+    }
+
+    pub fn on_polish_released(self: &Arc<Self>) {
+        self.on_shortcut_released();
+    }
+
+    fn pressed(self: &Arc<Self>, polish: bool) {
         if self.inner.lock().mic_test {
             // Le raccourci pendant le test du micro le termine simplement.
             self.stop_mic_test();
@@ -190,7 +213,7 @@ impl Dictation {
         match (phase, mode) {
             (Phase::Idle, _) => {
                 self.inner.lock().pressed_at = Some(Instant::now());
-                self.begin(Mode::PushToTalk);
+                self.begin(Mode::PushToTalk, polish);
             }
             (Phase::Recording, Mode::HandsFree) => self.finish(),
             // Répétition automatique de la touche maintenue, ou traitement en cours : ignorer.
@@ -200,21 +223,21 @@ impl Dictation {
 
     pub fn on_shortcut_released(self: &Arc<Self>) {
         let threshold = Duration::from_millis(self.settings().hands_free_tap_ms);
-        let switch_to_hands_free = {
+        let (switch_to_hands_free, polish) = {
             let mut g = self.inner.lock();
             if g.phase != Phase::Recording || g.mode != Mode::PushToTalk {
                 return;
             }
             let held = g.pressed_at.take().map(|t| t.elapsed()).unwrap_or(Duration::MAX);
-            held < threshold
+            (held < threshold, g.polish)
         };
         if switch_to_hands_free {
-            self.set_state(
-                Phase::Recording,
-                Mode::HandsFree,
-                Some("Mains libres : appuyez à nouveau pour terminer"),
-                false,
-            );
+            let msg = if polish {
+                "Dictez la consigne, puis appuyez à nouveau (ou appuyez tout de suite pour corriger)"
+            } else {
+                "Mains libres : appuyez à nouveau pour terminer"
+            };
+            self.set_state(Phase::Recording, Mode::HandsFree, Some(msg), false);
         } else {
             self.finish();
         }
@@ -264,7 +287,7 @@ impl Dictation {
         }
         let phase = self.inner.lock().phase;
         match phase {
-            Phase::Idle => self.begin(Mode::HandsFree),
+            Phase::Idle => self.begin(Mode::HandsFree, false),
             Phase::Recording => self.finish(),
             Phase::Processing => {}
         }
@@ -280,6 +303,7 @@ impl Dictation {
             g.generation += 1;
             g.pressed_at = None;
             g.context_task = None;
+            g.polish = false;
             (g.phase, g.stream.take())
         };
         if let Some(stream) = stream {
@@ -343,19 +367,21 @@ impl Dictation {
         });
     }
 
-    fn begin(self: &Arc<Self>, mode: Mode) {
+    fn begin(self: &Arc<Self>, mode: Mode, polish: bool) {
         let device = self.settings().input_device;
         match self.recorder.start(&device) {
             Ok(()) => {
-                let msg = match mode {
-                    Mode::HandsFree => "Mains libres : cliquez ou appuyez pour terminer",
-                    Mode::PushToTalk => "Enregistrement…",
+                let msg = match (mode, polish) {
+                    (Mode::HandsFree, false) => "Mains libres : cliquez ou appuyez pour terminer",
+                    (Mode::PushToTalk, false) => "Enregistrement…",
+                    (_, true) => "Réécriture : dictez la consigne, ou relâchez pour corriger",
                 };
+                self.inner.lock().polish = polish;
                 self.play(Sound::Start);
                 self.set_state(Phase::Recording, mode, Some(msg), false);
                 self.duck_others();
                 self.spawn_level_loop();
-                self.start_context_capture();
+                self.start_context_capture(polish);
                 self.start_stream();
             }
             Err(e) => {
@@ -369,8 +395,9 @@ impl Dictation {
     }
 
     /// Lit l'application active et le champ focalisé en arrière-plan (UI Automation).
-    fn start_context_capture(self: &Arc<Self>) {
-        if !self.settings().context_enabled {
+    /// Toujours fait pour une réécriture, qui a besoin de la sélection.
+    fn start_context_capture(self: &Arc<Self>, force: bool) {
+        if !force && !self.settings().context_enabled {
             return;
         }
         let task = std::thread::Builder::new()
@@ -477,7 +504,7 @@ impl Dictation {
     }
 
     fn finish(self: &Arc<Self>) {
-        let (generation, mode, stream, context_task) = {
+        let (generation, mode, stream, context_task, polish) = {
             let mut g = self.inner.lock();
             if g.phase != Phase::Recording {
                 return;
@@ -485,7 +512,7 @@ impl Dictation {
             g.phase = Phase::Processing;
             g.generation += 1;
             g.pressed_at = None;
-            (g.generation, g.mode, g.stream.take(), g.context_task.take())
+            (g.generation, g.mode, g.stream.take(), g.context_task.take(), g.polish)
         };
         self.play(Sound::Stop);
         self.set_state(Phase::Processing, mode, Some("Transcription…"), false);
@@ -504,7 +531,8 @@ impl Dictation {
                 return;
             }
         };
-        if capture.duration_ms < MIN_DURATION_MS {
+        // Une réécriture sans consigne dictée est valable (consigne par défaut).
+        if capture.duration_ms < MIN_DURATION_MS && !polish {
             if let Some(stream) = stream {
                 stream.abort();
             }
@@ -522,7 +550,11 @@ impl Dictation {
                     .flatten(),
                 None => None,
             };
-            this.process(capture, generation, stream, ctx).await;
+            if polish {
+                this.process_polish(capture, generation, stream, ctx).await;
+            } else {
+                this.process(capture, generation, stream, ctx).await;
+            }
         });
     }
 
@@ -664,6 +696,8 @@ impl Dictation {
             app: ctx.as_ref().map(|c| c.app.clone()).filter(|a| !a.is_empty()),
             window_title: ctx.as_ref().map(|c| c.window_title.clone()).filter(|t| !t.is_empty()),
             url: ctx.as_ref().and_then(|c| c.url.clone()),
+            kind: "dictation".into(),
+            source_text: None,
         };
 
         let raw = match transcribed {
@@ -754,32 +788,218 @@ impl Dictation {
             final_text = context::smart_spacing(&final_text, c);
         }
 
-        let to_paste = final_text.clone();
+        let unformatted = entry.error.is_some();
+        self.paste_and_verify(
+            &mut entry,
+            &final_text,
+            ctx.as_ref(),
+            &settings,
+            "Collé",
+            unformatted.then_some("Collé (sans mise en forme)"),
+        )
+        .await;
+        self.store_and_notify(entry);
+    }
+
+    /// Réécriture du texte sélectionné : consigne dictée → modèle de langue → remplacement.
+    async fn process_polish(
+        self: Arc<Self>,
+        capture: Capture,
+        generation: u64,
+        stream: Option<Arc<StreamSession>>,
+        ctx: Option<InsertionContext>,
+    ) {
+        let state = self.app.state::<AppState>();
+        let settings = state.settings.read().clone();
+        let ctx = ctx.filter(|c| !c.password);
+        let started = Instant::now();
+        let mut entry = HistoryEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            asr_text: String::new(),
+            formatted_text: None,
+            pasted_text: None,
+            status: "ok".into(),
+            duration_ms: capture.duration_ms as i64,
+            latency_ms: 0,
+            model: String::new(),
+            error: None,
+            app: ctx.as_ref().map(|c| c.app.clone()).filter(|a| !a.is_empty()),
+            window_title: ctx.as_ref().map(|c| c.window_title.clone()).filter(|t| !t.is_empty()),
+            url: ctx.as_ref().and_then(|c| c.url.clone()),
+            kind: "polish".into(),
+            source_text: None,
+        };
+
+        // 1. La consigne dictée (vide = consigne par défaut des réglages).
+        let instruction = if capture.duration_ms < MIN_DURATION_MS {
+            if let Some(stream) = stream {
+                stream.abort();
+            }
+            String::new()
+        } else {
+            let transcribed = match self.finish_stream(&settings, stream).await {
+                Some(t) => Ok(t),
+                None => self.transcribe_whole(&settings, capture).await,
+            };
+            match transcribed {
+                Ok(t) => {
+                    entry.model = t.engine;
+                    entry.latency_ms = t.latency_ms as i64;
+                    self.vocabulary().apply_replacements(t.text.trim()).text
+                }
+                Err(e) => {
+                    log::warn!("consigne non transcrite, consigne par défaut utilisée : {e:#}");
+                    entry.error = Some(format!("consigne non transcrite : {e:#}"));
+                    String::new()
+                }
+            }
+        };
+        entry.asr_text = instruction.clone();
+        log::info!(
+            "réécriture : consigne « {} » ({} ms après le relâchement)",
+            instruction.chars().take(80).collect::<String>(),
+            started.elapsed().as_millis()
+        );
+        if !self.is_current(generation) {
+            self.set_state(Phase::Idle, Mode::PushToTalk, None, false);
+            return;
+        }
+
+        // 2. Le texte sélectionné : lu par UI Automation au début, sinon Ctrl+C une fois
+        //    les touches du raccourci relâchées.
+        let mut selection = ctx.as_ref().map(|c| c.selected.clone()).unwrap_or_default();
+        if selection.trim().is_empty() {
+            self.set_state(Phase::Processing, Mode::PushToTalk, Some("Lecture de la sélection…"), false);
+            let copied = tauri::async_runtime::spawn_blocking(|| {
+                if !paste::wait_modifiers_released(Duration::from_millis(1500)) {
+                    log::warn!("touches de raccourci toujours enfoncées, copie de la sélection tentée quand même");
+                }
+                paste::copy_selection()
+            })
+            .await;
+            selection = match copied {
+                Ok(Ok(text)) => {
+                    log::info!("sélection lue par le presse-papiers : {} car.", text.chars().count());
+                    text
+                }
+                Ok(Err(e)) => {
+                    log::warn!("copie de la sélection impossible : {e:#}");
+                    String::new()
+                }
+                Err(e) => {
+                    log::warn!("copie de la sélection interrompue : {e}");
+                    String::new()
+                }
+            };
+        } else {
+            log::info!("sélection lue par UI Automation : {} car.", selection.chars().count());
+        }
+        if selection.trim().is_empty() {
+            self.play(Sound::Error);
+            entry.status = "no_selection".into();
+            self.set_state(Phase::Idle, Mode::PushToTalk, Some("Aucun texte sélectionné"), true);
+            self.store_and_notify(entry);
+            return;
+        }
+        entry.source_text = Some(selection.clone());
+
+        // 3. Réécriture par le modèle de langue.
+        self.set_state(Phase::Processing, Mode::PushToTalk, Some("Réécriture…"), false);
+        let vocabulary = self.vocabulary();
+        let rewritten = match self.format_endpoint(&settings).await {
+            Ok(endpoint) => {
+                let cfg = FormatConfig {
+                    endpoint,
+                    instructions: String::new(),
+                    context: ctx.clone(),
+                    terms: vocabulary.terms_for_prompt(40),
+                };
+                format::polish_text(&state.http, &cfg, &selection, &instruction, &settings.polish_default_instruction)
+                    .await
+                    .map(|f| (f, cfg.endpoint.label()))
+            }
+            Err(e) => Err(e),
+        };
+        let final_text = match rewritten {
+            Ok((f, label)) => {
+                log::info!("réécriture par {label} en {} ms", f.elapsed_ms);
+                entry.latency_ms += f.elapsed_ms as i64;
+                entry.model = if entry.model.is_empty() { label } else { format!("{} + {label}", entry.model) };
+                // Conserver les espaces / sauts de ligne qui bordaient la sélection.
+                let leading = &selection[..selection.len() - selection.trim_start().len()];
+                let trailing = &selection[selection.trim_end().len()..];
+                format!("{leading}{}{trailing}", f.text)
+            }
+            Err(e) => {
+                log::error!("réécriture impossible : {e:#}");
+                self.play(Sound::Error);
+                entry.status = "polish_failed".into();
+                entry.error = Some(format!("{e:#}"));
+                let msg = format!("Réécriture impossible : {e}");
+                self.set_state(Phase::Idle, Mode::PushToTalk, Some(&msg), true);
+                self.store_and_notify(entry);
+                return;
+            }
+        };
+        if !self.is_current(generation) {
+            self.set_state(Phase::Idle, Mode::PushToTalk, None, false);
+            return;
+        }
+        if final_text.trim() == selection.trim() {
+            entry.status = "unchanged".into();
+            self.play(Sound::Done);
+            self.set_state(Phase::Idle, Mode::PushToTalk, Some("Rien à changer"), false);
+            self.store_and_notify(entry);
+            return;
+        }
+        entry.formatted_text = Some(final_text.clone());
+
+        // 4. Remplacement de la sélection (Ctrl+V), puis vérification.
+        let note = entry.error.is_some().then_some("Remplacé ✓ (consigne par défaut)");
+        self.paste_and_verify(&mut entry, &final_text, ctx.as_ref(), &settings, "Remplacé", note).await;
+        self.store_and_notify(entry);
+    }
+
+    /// Colle `final_text` (Ctrl+V), vérifie par UI Automation et met à jour `entry` et l'état.
+    /// `verb` ouvre le message final (« Collé », « Remplacé ») ; `note` le remplace quand
+    /// le collage a réussi mais qu'une étape amont a été dégradée.
+    async fn paste_and_verify(
+        self: &Arc<Self>,
+        entry: &mut HistoryEntry,
+        final_text: &str,
+        ctx: Option<&InsertionContext>,
+        settings: &Settings,
+        verb: &str,
+        note: Option<&str>,
+    ) {
+        let to_paste = final_text.to_string();
         let (restore_clipboard, paste_delay_ms) = (settings.restore_clipboard, settings.paste_delay_ms);
-        let pasted = tauri::async_runtime::spawn_blocking(move || paste::paste_text(&to_paste, restore_clipboard, paste_delay_ms)).await;
+        let pasted =
+            tauri::async_runtime::spawn_blocking(move || paste::paste_text(&to_paste, restore_clipboard, paste_delay_ms)).await;
         match pasted {
             Ok(Ok(())) => {
-                entry.pasted_text = Some(final_text.clone());
-                let verification = match ctx.as_ref() {
+                entry.pasted_text = Some(final_text.to_string());
+                let verification = match ctx {
                     Some(c) if c.readable => {
-                        let text = final_text.clone();
+                        let text = final_text.to_string();
                         tauri::async_runtime::spawn_blocking(move || context::verify_pasted(&text))
                             .await
                             .unwrap_or(Verification::Unavailable)
                     }
                     _ => Verification::Unavailable,
                 };
-                let msg = match (verification, entry.error.is_some()) {
+                let msg = match (verification, note) {
                     (Verification::Missing, _) => {
                         entry.status = "paste_unverified".into();
-                        "Collé ? Le texte n'a pas été retrouvé dans le champ"
+                        format!("{verb} ? Le texte n'a pas été retrouvé dans le champ")
                     }
-                    (_, true) => "Collé (sans mise en forme)",
-                    (Verification::Verified, false) => "Collé ✓ (vérifié)",
-                    (Verification::Unavailable, false) => "Collé ✓",
+                    (_, Some(note)) => note.to_string(),
+                    (Verification::Verified, None) => format!("{verb} ✓ (vérifié)"),
+                    (Verification::Unavailable, None) => format!("{verb} ✓"),
                 };
                 self.play(if verification == Verification::Missing { Sound::Error } else { Sound::Done });
-                self.set_state(Phase::Idle, Mode::PushToTalk, Some(msg), false);
+                self.set_state(Phase::Idle, Mode::PushToTalk, Some(&msg), false);
             }
             Ok(Err(e)) => {
                 log::error!("collage impossible : {e:#}");
@@ -799,7 +1019,6 @@ impl Dictation {
                 self.set_state(Phase::Idle, Mode::PushToTalk, Some("Collage interrompu"), true);
             }
         }
-        self.store_and_notify(entry);
     }
 
     fn store_and_notify(self: &Arc<Self>, entry: HistoryEntry) {

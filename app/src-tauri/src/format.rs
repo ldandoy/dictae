@@ -158,7 +158,68 @@ pub async fn format_text(client: &reqwest::Client, cfg: &FormatConfig, raw: &str
     let started = Instant::now();
     let system = system_prompt_with(&cfg.instructions, cfg.context.as_ref(), &cfg.terms);
     let max_tokens = raw.chars().count() * 2 + 64;
-    let content = match &cfg.endpoint {
+    let content = chat(client, &cfg.endpoint, &system, raw, max_tokens).await?;
+    let cleaned = clean_response(&content);
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if !looks_plausible(raw, &cleaned) {
+        log::warn!("mise en forme ignorée (réponse implausible) : {cleaned:?}");
+        return Ok(Formatted { text: raw.to_string(), elapsed_ms });
+    }
+    Ok(Formatted { text: cleaned, elapsed_ms })
+}
+
+const POLISH_PROMPT: &str = "Tu es l'assistant d'écriture d'un logiciel de dictée. L'utilisateur a sélectionné un texte \
+dans une application et te donne, à la voix, une consigne pour le retravailler. \
+Applique la consigne au texte sélectionné et renvoie uniquement le texte résultant, dans la même langue que le texte \
+sauf si la consigne demande une traduction, sans commentaire, sans guillemets, sans préambule. \
+Conserve la mise en page (sauts de ligne, listes) quand elle a un sens. \
+Si la consigne est vague ou absente, corrige l'orthographe et la grammaire et améliore légèrement la clarté sans \
+changer le sens ni le ton.";
+
+/// Réécrit `selection` selon `instruction` (texte dicté) ; `fallback_instruction` sert si
+/// l'utilisateur n'a rien dicté.
+pub async fn polish_text(
+    client: &reqwest::Client,
+    cfg: &FormatConfig,
+    selection: &str,
+    instruction: &str,
+    fallback_instruction: &str,
+) -> Result<Formatted> {
+    let selection = selection.trim();
+    if selection.is_empty() {
+        bail!("aucun texte sélectionné");
+    }
+    let started = Instant::now();
+    let (system, user) = polish_messages(cfg, selection, instruction, fallback_instruction);
+    let max_tokens = selection.chars().count() * 3 + 256;
+    let content = chat(client, &cfg.endpoint, &system, &user, max_tokens).await?;
+    let cleaned = clean_response(&content);
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if cleaned.is_empty() {
+        bail!("le modèle n'a rien renvoyé");
+    }
+    Ok(Formatted { text: cleaned, elapsed_ms })
+}
+
+/// Messages système et utilisateur d'une réécriture.
+fn polish_messages(cfg: &FormatConfig, selection: &str, instruction: &str, fallback_instruction: &str) -> (String, String) {
+    let instruction = if instruction.trim().is_empty() { fallback_instruction.trim() } else { instruction.trim() };
+    let mut system = POLISH_PROMPT.to_string();
+    if let Some(ctx) = cfg.context.as_ref() {
+        system.push_str(&format!("\n\nContexte : le texte vient de l'application « {} ».", ctx.app));
+    }
+    if !cfg.terms.is_empty() {
+        let list = cfg.terms.iter().map(|t| format!("« {t} »")).collect::<Vec<_>>().join(", ");
+        system.push_str(&format!("\n\nVocabulaire de l'utilisateur, à écrire exactement ainsi : {list}."));
+    }
+    let user = format!("Texte sélectionné :\n\"\"\"\n{selection}\n\"\"\"\n\nConsigne : {instruction}");
+    (system, user)
+}
+
+/// Envoie une conversation (système + utilisateur) au point configuré et renvoie le contenu brut.
+async fn chat(client: &reqwest::Client, endpoint: &FormatEndpoint, system: &str, user: &str, max_tokens: usize) -> Result<String> {
+    let raw = user;
+    let content = match endpoint {
         FormatEndpoint::Ollama { base_url, model } => {
             if model.trim().is_empty() {
                 bail!("aucun modèle Ollama sélectionné");
@@ -224,14 +285,7 @@ pub async fn format_text(client: &reqwest::Client, cfg: &FormatConfig, raw: &str
                 .unwrap_or_default()
         }
     };
-
-    let cleaned = clean_response(&content);
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    if !looks_plausible(raw, &cleaned) {
-        log::warn!("mise en forme ignorée (réponse implausible) : {cleaned:?}");
-        return Ok(Formatted { text: raw.to_string(), elapsed_ms });
-    }
-    Ok(Formatted { text: cleaned, elapsed_ms })
+    Ok(content)
 }
 
 async fn post_json(client: &reqwest::Client, url: &str, body: &serde_json::Value, who: &str) -> Result<String> {
@@ -292,6 +346,22 @@ mod tests {
         assert!(!looks_plausible("bonjour le monde", ""));
         assert!(!looks_plausible("un texte assez long pour que la règle s'applique vraiment ici", "Oui."));
         assert!(!looks_plausible("court", &"x".repeat(200)));
+    }
+
+    #[test]
+    fn polish_messages_use_fallback_when_nothing_dictated() {
+        let cfg = FormatConfig {
+            endpoint: FormatEndpoint::LlamaServer { port: 1 },
+            instructions: String::new(),
+            context: None,
+            terms: vec!["Dictae".into()],
+        };
+        let (system, user) = polish_messages(&cfg, "bonjour  a tous", "  ", "Corrige les fautes.");
+        assert!(system.contains("« Dictae »"));
+        assert!(user.ends_with("Consigne : Corrige les fautes."));
+        assert!(user.contains("bonjour  a tous"));
+        let (_, user) = polish_messages(&cfg, "x", "traduis en anglais", "Corrige les fautes.");
+        assert!(user.ends_with("Consigne : traduis en anglais"));
     }
 
     #[test]

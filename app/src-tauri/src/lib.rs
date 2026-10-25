@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use parking_lot::{Mutex, RwLock};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -52,6 +52,8 @@ pub struct AppState {
     pub llama: llama::LlamaServer,
     /// Identifiants des modèles en cours de téléchargement.
     pub downloading: Mutex<Vec<String>>,
+    /// Raccourci de réécriture enregistré (pour le distinguer du push-to-talk dans le gestionnaire).
+    pub polish_shortcut: Mutex<Option<Shortcut>>,
 }
 
 // ----- commandes exposées au frontend ---------------------------------------
@@ -64,10 +66,10 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 #[tauri::command]
 fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     let previous = state.settings.read().clone();
-    if settings.shortcut != previous.shortcut {
-        if let Err(e) = register_shortcut(&app, &settings.shortcut) {
-            // Remettre l'ancien raccourci pour ne pas laisser l'app sans déclencheur.
-            let _ = register_shortcut(&app, &previous.shortcut);
+    if settings.shortcut != previous.shortcut || settings.polish_shortcut != previous.polish_shortcut {
+        if let Err(e) = register_shortcuts(&app, &settings.shortcut, &settings.polish_shortcut) {
+            // Remettre les anciens raccourcis pour ne pas laisser l'app sans déclencheur.
+            let _ = register_shortcuts(&app, &previous.shortcut, &previous.polish_shortcut);
             return Err(format!("{e:#}"));
         }
     }
@@ -463,16 +465,38 @@ fn preload_local_model(app: &AppHandle) {
     });
 }
 
-fn register_shortcut(app: &AppHandle, spec: &str) -> Result<()> {
+/// Enregistre le raccourci push-to-talk et, s'il n'est pas vide, celui de réécriture.
+fn register_shortcuts(app: &AppHandle, spec: &str, polish_spec: &str) -> Result<()> {
     let shortcut: Shortcut = spec
         .parse()
         .map_err(|e| anyhow!("raccourci invalide « {spec} » : {e}"))?;
+    let polish: Option<Shortcut> = if polish_spec.trim().is_empty() {
+        None
+    } else {
+        Some(
+            polish_spec
+                .parse()
+                .map_err(|e| anyhow!("raccourci de réécriture invalide « {polish_spec} » : {e}"))?,
+        )
+    };
+    if polish == Some(shortcut) {
+        bail!("le raccourci de réécriture doit être différent du raccourci de dictée");
+    }
     let gs = app.global_shortcut();
     gs.unregister_all()
         .map_err(|e| anyhow!("désenregistrement des raccourcis : {e}"))?;
     gs.register(shortcut)
         .map_err(|e| anyhow!("enregistrement de « {spec} » : {e} (déjà utilisé par une autre application ?)"))?;
     log::info!("raccourci push-to-talk : {spec}");
+    if let Some(p) = polish {
+        gs.register(p).map_err(|e| {
+            anyhow!("enregistrement de « {polish_spec} » : {e} (déjà utilisé par une autre application ?)")
+        })?;
+        log::info!("raccourci de réécriture : {polish_spec}");
+    }
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.polish_shortcut.lock() = polish;
+    }
     Ok(())
 }
 
@@ -542,11 +566,17 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
+                    let is_polish = app
+                        .try_state::<AppState>()
+                        .map(|s| s.polish_shortcut.lock().as_ref() == Some(shortcut))
+                        .unwrap_or(false);
                     if let Some(dictation) = app.try_state::<Arc<Dictation>>() {
-                        match event.state {
-                            ShortcutState::Pressed => dictation.on_shortcut_pressed(),
-                            ShortcutState::Released => dictation.on_shortcut_released(),
+                        match (event.state, is_polish) {
+                            (ShortcutState::Pressed, false) => dictation.on_shortcut_pressed(),
+                            (ShortcutState::Released, false) => dictation.on_shortcut_released(),
+                            (ShortcutState::Pressed, true) => dictation.on_polish_pressed(),
+                            (ShortcutState::Released, true) => dictation.on_polish_released(),
                         }
                     }
                 })
@@ -570,6 +600,7 @@ pub fn run() {
                 .build()?;
 
             let shortcut_spec = settings.shortcut.clone();
+            let polish_spec = settings.polish_shortcut.clone();
             let llama_exe = app
                 .path()
                 .resolve("resources/llama/llama-server.exe", tauri::path::BaseDirectory::Resource)
@@ -589,6 +620,7 @@ pub fn run() {
                 local_asr: LocalAsr::new(),
                 llama,
                 downloading: Mutex::new(Vec::new()),
+                polish_shortcut: Mutex::new(None),
             });
 
             autocomplete_onboarding(&app.state::<AppState>());
@@ -597,7 +629,7 @@ pub fn run() {
             let dictation = Dictation::new(app.handle().clone(), recorder);
             app.manage(dictation);
 
-            if let Err(e) = register_shortcut(app.handle(), &shortcut_spec) {
+            if let Err(e) = register_shortcuts(app.handle(), &shortcut_spec, &polish_spec) {
                 log::error!("{e:#}");
             }
             if let Err(e) = setup_tray(app.handle()) {

@@ -203,6 +203,35 @@ transcription), (3) premier essai du raccourci dans une zone de texte du hub, co
 `dictation://result`. Au démarrage, si les modèles sont déjà présents, l'accueil est marqué
 terminé (utilisateurs existants) ; « Revoir l'accueil » dans À propos le rouvre.
 
+## Réécriture de la sélection (0.3.0)
+
+Un second raccourci global (`polishShortcut`, défaut `Ctrl+Alt+Space`, vide = désactivé)
+réutilise toute la mécanique de la dictée (maintenir / appui bref mains libres, flux
+whisper, sons, coupure du son des autres applications) mais ce qui est dicté est une
+**consigne**, pas un texte :
+
+1. À l'appui, `Dictation::begin(mode, polish = true)` lance l'enregistrement et la lecture
+   du contexte UI Automation, forcée même si le contexte est désactivé : `ctx.selected`
+   est lu en entier (jusqu'à 20 000 caractères, `SELECTED_MAX`) au lieu des 400 d'avant.
+2. Au relâchement, `process_polish` transcrit la consigne (vide si l'appui a duré moins de
+   300 ms : la consigne par défaut `polishDefaultInstruction` s'applique alors). Si UIA n'a
+   pas fourni la sélection (application sans `TextPattern`), repli par `paste::copy_selection`
+   (Ctrl+C simulé avec marqueur dans le presse-papiers, ancien contenu remis), mais seulement
+   après `wait_modifiers_released` : les touches du raccourci encore enfoncées transformeraient
+   le Ctrl+C en Ctrl+Alt+C. Aucune sélection → statut `no_selection`.
+3. `format::polish_text` envoie au même point que la mise en forme (llama.cpp intégré ou
+   Ollama) un prompt dédié (`POLISH_PROMPT`) avec le texte sélectionné entre `"""`, la
+   consigne, l'application d'origine et le vocabulaire ; `max_tokens` = 3 × la longueur de
+   la sélection + 256. Les espaces et sauts de ligne qui bordaient la sélection sont
+   conservés autour du résultat ; un résultat identique donne le statut `unchanged`.
+4. Le collage (`paste_and_verify`, partagé avec la dictée) remplace la sélection encore
+   active dans l'application, puis vérifie par UIA. Message « Remplacé ✓ ».
+
+Historique : colonnes `kind` (`dictation` / `polish`) et `source_text` (texte avant
+réécriture) ajoutées par migration ; le hub affiche la consigne et le texte d'origine.
+Le raccourci de réécriture est distingué du push-to-talk dans le gestionnaire du plugin
+global-shortcut en comparant le `Shortcut` reçu à celui mémorisé dans `AppState`.
+
 ## Choix et compromis
 
 - **ASR via API compatible OpenAI** en option : zéro infrastructure, et les presets

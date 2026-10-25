@@ -58,6 +58,10 @@ pub struct Settings {
     pub onboarding_completed: bool,
     /// Raccourci global push-to-talk, format `Ctrl+Shift+Space`.
     pub shortcut: String,
+    /// Raccourci de réécriture du texte sélectionné (vide = désactivé).
+    pub polish_shortcut: String,
+    /// Consigne appliquée quand on appuie sur le raccourci de réécriture sans rien dicter.
+    pub polish_default_instruction: String,
     /// Remettre le contenu précédent du presse-papiers après le collage.
     pub restore_clipboard: bool,
     /// Délai entre l'écriture du presse-papiers et l'envoi de Ctrl+V.
@@ -93,6 +97,8 @@ impl Default for Settings {
             launch_at_login: false,
             onboarding_completed: false,
             shortcut: "Ctrl+Shift+Space".into(),
+            polish_shortcut: "Ctrl+Alt+Space".into(),
+            polish_default_instruction: "Corrige l'orthographe et la grammaire et améliore légèrement la clarté, sans changer le sens, le ton ni la longueur.".into(),
             restore_clipboard: true,
             paste_delay_ms: 60,
             hands_free_tap_ms: 300,

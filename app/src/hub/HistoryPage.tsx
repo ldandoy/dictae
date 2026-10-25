@@ -20,6 +20,12 @@ function statusChip(e: HistoryEntry) {
       return <span className="chip warn">collage non vérifié</span>;
     case "asr_failed":
       return <span className="chip bad">erreur ASR</span>;
+    case "no_selection":
+      return <span className="chip warn">aucune sélection</span>;
+    case "polish_failed":
+      return <span className="chip bad">réécriture échouée</span>;
+    case "unchanged":
+      return <span className="chip">inchangé</span>;
     default:
       return <span className="chip">{e.status}</span>;
   }
@@ -88,6 +94,7 @@ export function HistoryPage() {
             <div key={e.id} className="card history-item">
               <div className="meta">
                 <span>{fmtDate.format(new Date(e.createdAt))}</span>
+                {e.kind === "polish" && <span className="chip accent">réécriture</span>}
                 {statusChip(e)}
                 {e.app && (
                   <span className="chip" title={[e.windowTitle, e.url].filter(Boolean).join("\n")}>
@@ -110,13 +117,31 @@ export function HistoryPage() {
                   </button>
                 </span>
               </div>
-              <div className={`text ${e.asrText ? "" : "empty"}`}>
-                {e.formattedText ?? e.asrText ?? "(aucun texte)"}
-              </div>
-              {e.formattedText && e.formattedText !== e.asrText && (
-                <div className="raw" title="Transcription brute avant mise en forme">
-                  brut : {e.asrText}
-                </div>
+              {e.kind === "polish" ? (
+                <>
+                  <div className={`text ${e.formattedText ? "" : "empty"}`}>
+                    {e.formattedText ?? "(pas de réécriture)"}
+                  </div>
+                  {e.sourceText && (
+                    <div className="raw" title="Texte sélectionné avant réécriture">
+                      avant : {e.sourceText}
+                    </div>
+                  )}
+                  <div className="raw" title="Consigne dictée">
+                    consigne : {e.asrText || "(aucune, consigne par défaut)"}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className={`text ${e.asrText ? "" : "empty"}`}>
+                    {e.formattedText ?? e.asrText ?? "(aucun texte)"}
+                  </div>
+                  {e.formattedText && e.formattedText !== e.asrText && (
+                    <div className="raw" title="Transcription brute avant mise en forme">
+                      brut : {e.asrText}
+                    </div>
+                  )}
+                </>
               )}
               {e.error && <div className="err">{e.error}</div>}
             </div>

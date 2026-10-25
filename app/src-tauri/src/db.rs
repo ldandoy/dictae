@@ -30,6 +30,10 @@ pub struct HistoryEntry {
     pub app: Option<String>,
     pub window_title: Option<String>,
     pub url: Option<String>,
+    /// `dictation` (texte dicté puis collé) ou `polish` (réécriture d'une sélection).
+    pub kind: String,
+    /// Pour une réécriture : le texte sélectionné avant remplacement.
+    pub source_text: Option<String>,
 }
 
 pub struct Db {
@@ -58,7 +62,9 @@ impl Db {
                  error          TEXT,
                  app            TEXT,
                  window_title   TEXT,
-                 url            TEXT
+                 url            TEXT,
+                 kind           TEXT NOT NULL DEFAULT 'dictation',
+                 source_text    TEXT
              );
              CREATE INDEX IF NOT EXISTS history_created_at ON history(created_at DESC);
              CREATE TABLE IF NOT EXISTS vocabulary (
@@ -82,8 +88,8 @@ impl Db {
 
     pub fn insert(&self, e: &HistoryEntry) -> Result<()> {
         self.conn.lock().execute(
-            "INSERT INTO history (id, created_at, asr_text, formatted_text, pasted_text, status, duration_ms, latency_ms, model, error, app, window_title, url)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO history (id, created_at, asr_text, formatted_text, pasted_text, status, duration_ms, latency_ms, model, error, app, window_title, url, kind, source_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 e.id,
                 e.created_at,
@@ -97,7 +103,9 @@ impl Db {
                 e.error,
                 e.app,
                 e.window_title,
-                e.url
+                e.url,
+                e.kind,
+                e.source_text
             ],
         )?;
         Ok(())
@@ -106,7 +114,7 @@ impl Db {
     pub fn list(&self, limit: u32) -> Result<Vec<HistoryEntry>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, created_at, asr_text, formatted_text, pasted_text, status, duration_ms, latency_ms, model, error, app, window_title, url
+            "SELECT id, created_at, asr_text, formatted_text, pasted_text, status, duration_ms, latency_ms, model, error, app, window_title, url, kind, source_text
              FROM history ORDER BY created_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |r| {
@@ -124,6 +132,8 @@ impl Db {
                 app: r.get(10)?,
                 window_title: r.get(11)?,
                 url: r.get(12)?,
+                kind: r.get(13)?,
+                source_text: r.get(14)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -232,9 +242,16 @@ fn migrate(conn: &Connection) -> Result<()> {
     let columns: Vec<String> = stmt
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<std::result::Result<_, _>>()?;
-    for column in ["formatted_text", "app", "window_title", "url"] {
+    for (column, decl) in [
+        ("formatted_text", "TEXT"),
+        ("app", "TEXT"),
+        ("window_title", "TEXT"),
+        ("url", "TEXT"),
+        ("kind", "TEXT NOT NULL DEFAULT 'dictation'"),
+        ("source_text", "TEXT"),
+    ] {
         if !columns.iter().any(|c| c == column) {
-            conn.execute(&format!("ALTER TABLE history ADD COLUMN {column} TEXT"), [])
+            conn.execute(&format!("ALTER TABLE history ADD COLUMN {column} {decl}"), [])
                 .with_context(|| format!("migration : colonne {column}"))?;
         }
     }
@@ -260,6 +277,8 @@ mod tests {
             app: Some("Slack".into()),
             window_title: None,
             url: None,
+            kind: "dictation".into(),
+            source_text: None,
         }
     }
 
@@ -329,6 +348,8 @@ mod tests {
         assert_eq!(list[0].id, "x");
         assert_eq!(list[0].formatted_text, None);
         assert_eq!(list[0].app, None);
+        assert_eq!(list[0].kind, "dictation");
+        assert_eq!(list[0].source_text, None);
         db.insert(&entry("y", "2026-01-02T00:00:00Z")).unwrap();
         assert_eq!(db.list(10).unwrap().len(), 2);
     }

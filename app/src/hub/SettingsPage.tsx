@@ -333,6 +333,28 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
               dicter ; un appui bref (&lt; {s.handsFreeTapMs} ms) passe en mains libres.
             </div>
           </div>
+          <div className="field">
+            <label>Raccourci de réécriture (texte sélectionné)</label>
+            <input
+              type="text"
+              value={s.polishShortcut}
+              placeholder="Vide = désactivé"
+              onChange={(e) => set("polishShortcut", e.target.value)}
+            />
+            <div className="hint">
+              Sélectionnez un texte dans n'importe quelle application, maintenez ce raccourci et dictez une consigne
+              (« mets au passé », « traduis en anglais », « plus formel »…) : le modèle de langue réécrit la sélection
+              et la remplace. Relâchez sans rien dire pour appliquer la consigne par défaut ci-dessous.
+            </div>
+          </div>
+          <div className="field">
+            <label>Consigne par défaut (sans rien dicter)</label>
+            <textarea
+              rows={2}
+              value={s.polishDefaultInstruction}
+              onChange={(e) => set("polishDefaultInstruction", e.target.value)}
+            />
+          </div>
           <div className="row">
             <div className="field" style={{ flex: 1 }}>
               <label>Seuil mains libres (ms)</label>

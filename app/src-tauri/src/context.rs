@@ -42,7 +42,8 @@ pub enum Verification {
 
 const BEFORE_MAX: i32 = 400;
 const AFTER_MAX: i32 = 120;
-const SELECTED_MAX: i32 = 400;
+/// La sélection est lue en entier (réécriture) ; au-delà on considère qu'il n'y en a pas d'exploitable.
+const SELECTED_MAX: i32 = 20_000;
 
 /// Nom lisible pour les exécutables courants.
 pub fn friendly_app_name(exe: &str) -> String {

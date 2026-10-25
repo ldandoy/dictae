@@ -37,6 +37,8 @@ export interface Settings {
   launchAtLogin: boolean;
   onboardingCompleted: boolean;
   shortcut: string;
+  polishShortcut: string;
+  polishDefaultInstruction: string;
   restoreClipboard: boolean;
   pasteDelayMs: number;
   handsFreeTapMs: number;
@@ -77,6 +79,10 @@ export interface HistoryEntry {
   app: string | null;
   windowTitle: string | null;
   url: string | null;
+  /** `dictation` ou `polish` (réécriture d'une sélection). */
+  kind: "dictation" | "polish";
+  /** Réécriture : le texte sélectionné avant remplacement. */
+  sourceText: string | null;
 }
 
 export type VocabKind = "term" | "replacement" | "snippet";
