@@ -11,6 +11,7 @@ mod llama;
 mod local_asr;
 mod models;
 mod paste;
+mod procguard;
 mod settings;
 mod sounds;
 mod stream;
@@ -610,6 +611,12 @@ pub fn run() {
                 llama_exe.display(),
                 if llama_exe.is_file() { "présent" } else { "absent" }
             );
+            // Un llama-server d'une instance précédente (tuée par l'installeur ou un plantage)
+            // garderait la mémoire vidéo et ralentirait tout.
+            let orphans = procguard::kill_orphans(&llama_exe);
+            if orphans > 0 {
+                log::warn!("{orphans} llama-server orphelin(s) terminé(s) au démarrage");
+            }
             let llama = llama::LlamaServer::new(llama_exe, http.clone());
             app.manage(AppState {
                 settings: RwLock::new(settings),

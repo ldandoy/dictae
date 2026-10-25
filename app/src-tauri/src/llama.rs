@@ -13,11 +13,15 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use tokio::sync::Mutex;
 
+use crate::{format, procguard};
+
 const CONTEXT_SIZE: u32 = 4096;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 
 struct Running {
     child: Child,
+    /// Job object « kill on close » : l'enfant meurt avec Dictae, même tué par l'installeur.
+    _job: Option<procguard::JobGuard>,
     port: u16,
     model: PathBuf,
     gpu: bool,
@@ -114,6 +118,7 @@ impl LlamaServer {
         }
         let started_at = Instant::now();
         let mut child = cmd.spawn().with_context(|| format!("lancement de {}", self.exe.display()))?;
+        let job = procguard::guard_child(&child);
         log::info!(
             "llama-server démarré (pid {}, port {port}, {}) : {}",
             child.id(),
@@ -154,6 +159,7 @@ impl LlamaServer {
         log::info!("llama-server prêt en {} ms", started_at.elapsed().as_millis());
         *g = Some(Running {
             child,
+            _job: job,
             port,
             model: model.to_path_buf(),
             gpu,
@@ -163,16 +169,19 @@ impl LlamaServer {
     }
 
     /// Première requête à blanc : sur GPU, la première inférence compile les pipelines
-    /// Vulkan (10 à 20 s). À appeler après `ensure_running`, hors du chemin de la dictée.
+    /// Vulkan (5 à 30 s). À appeler après `ensure_running`, hors du chemin de la dictée.
     pub async fn warm_up(&self, port: u16) -> Result<()> {
         let started = Instant::now();
+        // Requête de la taille d'une vraie dictée (prompt système + contexte + phrase) :
+        // les pipelines Vulkan se compilent par forme de calcul, une requête minuscule
+        // laissait la première vraie mise en forme à 30 s.
         let body = serde_json::json!({
             "model": "dictae",
             "stream": false,
             "temperature": 0,
-            "max_tokens": 4,
+            "max_tokens": 48,
             "chat_template_kwargs": { "enable_thinking": false },
-            "messages": [{ "role": "user", "content": "Bonjour." }]
+            "messages": format::warm_up_messages()
         });
         self.http
             .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))

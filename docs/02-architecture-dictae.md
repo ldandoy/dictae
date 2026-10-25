@@ -232,6 +232,25 @@ réécriture) ajoutées par migration ; le hub affiche la consigne et le texte d
 Le raccourci de réécriture est distingué du push-to-talk dans le gestionnaire du plugin
 global-shortcut en comparant le `Shortcut` reçu à celui mémorisé dans `AppState`.
 
+## Processus enfants et latence (0.3.1)
+
+Diagnostic du 25 octobre : après deux mises à jour, trois `llama-server.exe` tournaient
+en même temps (10 Go de RAM, mémoire vidéo de la RTX 3080 saturée) et la dictée passait
+de ~1 s à ~5 s (whisper 2,4 s au lieu de 0,45 s). L'installeur NSIS tue `Dictae.exe` sans
+lui laisser arrêter ses enfants. Deux parades dans `procguard.rs` :
+
+- chaque llama-server est rattaché à un **job object** Windows `KILL_ON_JOB_CLOSE`
+  (`JobGuard`, gardé dans `Running`) : si Dictae meurt, quelle qu'en soit la cause, le
+  système ferme le handle et tue l'enfant ;
+- au démarrage, `kill_orphans(exe)` termine les processus dont l'image est exactement notre
+  `llama-server.exe` (comparaison de chemin complet : une instance de développement ne touche
+  pas celle de l'application installée).
+
+Le préchauffage de llama-server envoie désormais une requête de la taille d'une vraie
+dictée (`format::warm_up_messages` : prompt système, contexte, vocabulaire, phrase de 40
+mots). Une requête minuscule ne compilait pas les pipelines Vulkan des formes réelles et la
+première mise en forme prenait 30 s.
+
 ## Choix et compromis
 
 - **ASR via API compatible OpenAI** en option : zéro infrastructure, et les presets

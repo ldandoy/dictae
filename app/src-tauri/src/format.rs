@@ -201,6 +201,27 @@ pub async fn polish_text(
     Ok(Formatted { text: cleaned, elapsed_ms })
 }
 
+/// Conversation de préchauffage, de la taille d'une vraie mise en forme (prompt système,
+/// contexte d'insertion, vocabulaire, phrase dictée), pour que la première dictée ne paie
+/// pas la compilation des pipelines GPU.
+pub fn warm_up_messages() -> serde_json::Value {
+    let ctx = InsertionContext {
+        app: "Bloc-notes".into(),
+        window_title: "Sans titre".into(),
+        before: "Bonjour Marie, merci pour ton retour d'hier. ".into(),
+        caret_known: true,
+        editable: true,
+        readable: true,
+        ..Default::default()
+    };
+    let system = system_prompt_with("", Some(&ctx), &["Dictae".to_string(), "Tauri".to_string()]);
+    let user = "alors euh je voulais te dire que la réunion de demain est décalée à quatorze heures trente                 et qu'il faudrait prévenir l'équipe de dictae parce que le point sur tauri est maintenu merci";
+    json!([
+        { "role": "system", "content": system },
+        { "role": "user", "content": user }
+    ])
+}
+
 /// Messages système et utilisateur d'une réécriture.
 fn polish_messages(cfg: &FormatConfig, selection: &str, instruction: &str, fallback_instruction: &str) -> (String, String) {
     let instruction = if instruction.trim().is_empty() { fallback_instruction.trim() } else { instruction.trim() };
