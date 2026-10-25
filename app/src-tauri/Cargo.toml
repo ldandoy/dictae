@@ -1,6 +1,6 @@
 [package]
 name = "dictae"
-version = "0.1.2"
+version = "0.1.3"
 description = "Dictée vocale système pour Windows"
 authors = ["Overconsulting"]
 edition = "2021"
@@ -58,9 +58,11 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Backend Vulkan (GPU) : nécessite le SDK Vulkan (VULKAN_SDK) à la compilation ;
+# à l'exécution, whisper.cpp retombe sur le CPU si aucun GPU Vulkan n'est disponible.
 [dependencies.whisper-rs]
 version = "0.16"
-features = ["log_backend"]
+features = ["log_backend", "vulkan"]
 
 [dependencies.futures-util]
 version = "0.3"

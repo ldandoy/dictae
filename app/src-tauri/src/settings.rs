@@ -18,6 +18,8 @@ pub struct Settings {
     pub local_model: String,
     /// Threads pour whisper.cpp ; 0 = automatique (cœurs physiques).
     pub local_threads: u32,
+    /// Utiliser le GPU (Vulkan) pour whisper.cpp quand il est disponible.
+    pub local_gpu: bool,
     /// Transcrire par segments pendant l'enregistrement (texte quasi immédiat au relâchement).
     pub streaming_enabled: bool,
 
@@ -60,9 +62,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             asr_provider: PROVIDER_LOCAL.into(),
-            // Sur CPU, small répond en ~2,5 s pour 7 s de parole ; large-v3-turbo en ~11 s.
-            local_model: "small-q5_1".into(),
+            // Sur GPU (Vulkan), large-v3-turbo répond en ~0,25 s pour 7 s de parole ; sur CPU
+            // il faut ~11 s et small (~2,5 s) est alors préférable.
+            local_model: "large-v3-turbo-q5_0".into(),
             local_threads: 0,
+            local_gpu: true,
             streaming_enabled: true,
             asr_base_url: "https://api.openai.com/v1".into(),
             asr_api_key: String::new(),

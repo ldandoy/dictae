@@ -178,6 +178,15 @@ export function SettingsPage({ onSaved }: { onSaved: (s: Settings) => void }) {
             </>
           )}
 
+          {s.asrProvider !== "openai" && (
+            <div className="field check">
+              <input id="gpu" type="checkbox" checked={s.localGpu} onChange={(e) => set("localGpu", e.target.checked)} />
+              <label htmlFor="gpu">
+                Utiliser la carte graphique (Vulkan) pour whisper : large-v3-turbo devient rapide ; décochez en cas
+                de problème d'affichage ou de pilote
+              </label>
+            </div>
+          )}
           <div className="field check">
             <input
               id="streaming"

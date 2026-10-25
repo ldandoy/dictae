@@ -18,6 +18,7 @@ export interface Settings {
   asrProvider: AsrProvider;
   localModel: string;
   localThreads: number;
+  localGpu: boolean;
   streamingEnabled: boolean;
   asrBaseUrl: string;
   asrApiKey: string;

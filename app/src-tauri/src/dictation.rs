@@ -387,11 +387,12 @@ impl Dictation {
             let path = models::installed_path(&state.models_dir, &settings.local_model)?;
             let language = settings.language.clone();
             let threads = settings.local_threads;
+            let gpu = settings.local_gpu;
             Some(Box::new(move |samples: &[f32], context: &str| {
                 let state = app.state::<AppState>();
                 Ok(state
                     .local_asr
-                    .transcribe(&path, samples, &language, threads, context, &terms)?
+                    .transcribe(&path, samples, &language, threads, gpu, context, &terms)?
                     .text)
             }))
         } else {
@@ -487,11 +488,12 @@ impl Dictation {
                 .ok_or_else(|| anyhow!("modèle « {model_id} » non téléchargé : ouvrez Réglages › Transcription"))?;
             let language = settings.language.clone();
             let threads = settings.local_threads;
+            let gpu = settings.local_gpu;
             let samples = capture.samples;
             let app = self.app.clone();
             let result = tauri::async_runtime::spawn_blocking(move || {
                 let state = app.state::<AppState>();
-                state.local_asr.transcribe(&path, &samples, &language, threads, "", &terms)
+                state.local_asr.transcribe(&path, &samples, &language, threads, gpu, "", &terms)
             })
             .await
             .map_err(|e| anyhow!("tâche whisper interrompue : {e}"))??;

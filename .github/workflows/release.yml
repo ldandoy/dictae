@@ -43,6 +43,13 @@ jobs:
           if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) { choco install llvm -y --no-progress }
           Get-Item "C:\Program Files\LLVM\bin\libclang.dll" | Select-Object FullName
 
+      # Backend Vulkan de whisper.cpp : le SDK fournit en-têtes, lib et compilateur de shaders.
+      - name: SDK Vulkan
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: latest
+          cache: true
+
       - name: Dépendances npm
         run: npm ci
 

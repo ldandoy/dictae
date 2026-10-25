@@ -20,6 +20,7 @@ static LOGGING: Once = Once::new();
 
 struct Loaded {
     path: PathBuf,
+    gpu: bool,
     ctx: Arc<WhisperContext>,
 }
 
@@ -44,10 +45,12 @@ impl LocalAsr {
         self.loaded.lock().as_ref().map(|l| l.path.clone())
     }
 
-    /// Charge le modèle s'il n'est pas déjà en mémoire (bloquant, 1 à 3 s pour un grand modèle).
-    pub fn ensure_loaded(&self, path: &Path) -> Result<Arc<WhisperContext>> {
+    /// Charge le modèle s'il n'est pas déjà en mémoire avec le même mode (bloquant,
+    /// 1 à 3 s pour un grand modèle). `gpu` : tenter le backend Vulkan ; whisper.cpp
+    /// retombe sur le CPU s'il n'y a pas de GPU utilisable.
+    pub fn ensure_loaded(&self, path: &Path, gpu: bool) -> Result<Arc<WhisperContext>> {
         if let Some(l) = self.loaded.lock().as_ref() {
-            if l.path == path {
+            if l.path == path && l.gpu == gpu {
                 return Ok(l.ctx.clone());
             }
         }
@@ -57,17 +60,19 @@ impl LocalAsr {
             .to_str()
             .ok_or_else(|| anyhow!("chemin de modèle non UTF-8 : {}", path.display()))?;
         let mut params = WhisperContextParameters::default();
-        params.use_gpu(true);
+        params.use_gpu(gpu);
         let ctx = WhisperContext::new_with_params(path_str, params)
             .with_context(|| format!("chargement du modèle {}", path.display()))?;
         log::info!(
-            "modèle whisper chargé en {} ms : {}",
+            "modèle whisper chargé en {} ms ({}) : {}",
             started.elapsed().as_millis(),
+            if gpu { "GPU demandé" } else { "CPU" },
             path.display()
         );
         let ctx = Arc::new(ctx);
         *self.loaded.lock() = Some(Loaded {
             path: path.to_path_buf(),
+            gpu,
             ctx: ctx.clone(),
         });
         Ok(ctx)
@@ -75,6 +80,16 @@ impl LocalAsr {
 
     pub fn unload(&self) {
         *self.loaded.lock() = None;
+    }
+
+    /// Charge le modèle puis exécute une inférence sur du silence : sur GPU, la première
+    /// inférence compile les pipelines Vulkan (10 à 20 s) ; autant le faire au démarrage.
+    pub fn warm_up(&self, path: &Path, language: &str, threads: u32, gpu: bool) -> Result<()> {
+        let silence = vec![0.0f32; MIN_SAMPLES];
+        let started = Instant::now();
+        let _ = self.transcribe(path, &silence, language, threads, gpu, "", "")?;
+        log::info!("préchauffage whisper terminé en {} ms", started.elapsed().as_millis());
+        Ok(())
     }
 
     /// `samples` : PCM f32 mono 16 kHz. `language` : code ISO ou vide pour la détection.
@@ -86,10 +101,11 @@ impl LocalAsr {
         samples: &[f32],
         language: &str,
         threads: u32,
+        gpu: bool,
         context: &str,
         terms: &str,
     ) -> Result<LocalTranscript> {
-        let ctx = self.ensure_loaded(path)?;
+        let ctx = self.ensure_loaded(path, gpu)?;
         let started = Instant::now();
 
         let mut audio = samples.to_vec();
@@ -281,8 +297,10 @@ mod tests {
             .collect();
 
         let asr = LocalAsr::new();
-        let t = asr.transcribe(&model, &samples, "fr", 0, "", "Dictae").unwrap();
-        eprintln!("[{}] {} ms → {:?}", model.display(), t.elapsed_ms, t.text);
+        let t = asr.transcribe(&model, &samples, "fr", 0, true, "", "Dictae").unwrap();
+        eprintln!("[{}] 1er appel (chargement + pipelines GPU) {} ms → {:?}", model.display(), t.elapsed_ms, t.text);
+        let t2 = asr.transcribe(&model, &samples, "fr", 0, true, "", "Dictae").unwrap();
+        eprintln!("[{}] 2e appel (chaud) {} ms", model.display(), t2.elapsed_ms);
         let lower = t.text.to_lowercase();
         assert!(lower.contains("bonjour"), "{lower}");
         assert!(lower.contains("demain"), "{lower}");
@@ -292,7 +310,7 @@ mod tests {
         let asr_for_engine = asr.clone();
         let model_for_engine = model.clone();
         let engine = move |seg: &[f32], context: &str| -> anyhow::Result<String> {
-            Ok(asr_for_engine.transcribe(&model_for_engine, seg, "fr", 0, context, "Dictae")?.text)
+            Ok(asr_for_engine.transcribe(&model_for_engine, seg, "fr", 0, true, context, "Dictae")?.text)
         };
         let chunks: Vec<Vec<f32>> = samples.chunks(TARGET_SAMPLE_RATE as usize / 10).map(|c| c.to_vec()).collect();
         let total = chunks.len();

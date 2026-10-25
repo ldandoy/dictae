@@ -35,6 +35,12 @@ jobs:
         run: |
           if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) { choco install llvm -y --no-progress }
 
+      - name: SDK Vulkan
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: latest
+          cache: true
+
       - name: Frontend
         run: |
           npm ci

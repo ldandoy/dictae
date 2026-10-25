@@ -75,7 +75,9 @@ fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings)
         .save(&state.settings_path)
         .map_err(|e| format!("{e:#}"))?;
     *state.settings.write() = settings.clone();
-    if settings.uses_local_asr() && (settings.local_model != previous.local_model || !previous.uses_local_asr()) {
+    if settings.uses_local_asr()
+        && (settings.local_model != previous.local_model || settings.local_gpu != previous.local_gpu || !previous.uses_local_asr())
+    {
         preload_local_model(&app);
     }
     let _ = app.emit("settings://changed", settings);
@@ -303,16 +305,16 @@ fn preload_local_model(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
-        let (enabled, id) = {
+        let (enabled, id, gpu, language, threads) = {
             let s = state.settings.read();
-            (s.uses_local_asr(), s.local_model.clone())
+            (s.uses_local_asr(), s.local_model.clone(), s.local_gpu, s.language.clone(), s.local_threads)
         };
         if !enabled {
             return;
         }
         match models::installed_path(&state.models_dir, &id) {
             Some(path) => {
-                if let Err(e) = state.local_asr.ensure_loaded(&path) {
+                if let Err(e) = state.local_asr.warm_up(&path, &language, threads, gpu) {
                     log::error!("préchargement du modèle {id} impossible : {e:#}");
                 }
             }

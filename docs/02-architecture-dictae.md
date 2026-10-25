@@ -77,9 +77,20 @@ TTS française de 7 s :
 | Ollama (GPU) | qwen3.5:4b, premier appel (chargement) | 9 s |
 | Ollama | Qwen3.8-27B IQ3_XXS (déborde la VRAM) | 113 s |
 
-D'où les défauts : `small-q5_1` pour la transcription et `qwen3.5:4b` pour la mise en
-forme (`keep_alive` 30 min pour rester chaud). Large-v3-turbo redevient intéressant avec
-l'accélération GPU de whisper.cpp (feature `vulkan`/`cuda`, SDK à installer).
+Avec le backend **Vulkan** (25 octobre 2026, feature `vulkan` de `whisper-rs`, SDK LunarG
+requis à la compilation), même fixture sur la RTX 3080 :
+
+| Modèle | GPU, chaud | GPU, 1er appel après installation du pilote |
+|---|---|---|
+| small q5_1 | 0,15 s | ≈ 20 s (compilation des pipelines, mise en cache par le pilote) |
+| large-v3-turbo q5_0 | 0,25 s | ≈ 12 s |
+
+D'où le défaut `large-v3-turbo-q5_0` et un **préchauffage** au démarrage (inférence sur
+1,1 s de silence) qui absorbe la compilation des pipelines. Sans GPU Vulkan, whisper.cpp
+retombe sur le CPU ; le réglage « Utiliser la carte graphique » force le CPU si besoin.
+Contrainte de build : chemins trop longs pour MSBuild (limite 260 caractères) avec le
+sous-projet `vulkan-shaders-gen`, d'où `target-dir = "C:/dt"` dans `.cargo/config.toml`.
+Mise en forme : `qwen3.5:4b` (`keep_alive` 30 min pour rester chaud).
 
 ## Transcription en continu (24 octobre 2026)
 

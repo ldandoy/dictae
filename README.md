@@ -19,8 +19,13 @@ docs/   analyse de référence de Wispr Flow et architecture de Dictae
 - Visual Studio 2022 Build Tools, workload « Développement Desktop en C++ » (linker MSVC, SDK Windows, CMake)
 - LLVM (`winget install LLVM.LLVM`) : `libclang` sert à générer les bindings de whisper.cpp ;
   le chemin est fixé dans `app/src-tauri/.cargo/config.toml` (`LIBCLANG_PATH`)
+- SDK Vulkan de LunarG (`winget install KhronosGroup.VulkanSDK`) pour le backend GPU de
+  whisper.cpp ; la version est fixée dans `app/src-tauri/.cargo/config.toml` (`VULKAN_SDK`)
 - WebView2 (présent sur Windows 11)
 - Ollama avec un petit modèle pour la mise en forme (`ollama pull qwen3.5:4b`), facultatif
+
+Le dossier de build Rust est `C:\dt` (réglé dans `.cargo/config.toml`) : les chemins de
+compilation des shaders Vulkan dépassent sinon la limite Windows de 260 caractères.
 
 ### Développement
 

@@ -1,6 +1,19 @@
+[build]
+# Dossier de build court : la compilation du backend Vulkan de whisper.cpp (vulkan-shaders-gen,
+# sous-projet CMake) crée des chemins qui dépassent la limite Windows de 260 caractères
+# depuis app/src-tauri/target. Même emplacement pour les workflows GitHub (runner Windows).
+target-dir = "C:/dt"
+# Compilation lourde (whisper.cpp + shaders) : limiter la charge, la machine de développement
+# a redémarré deux fois à pleine charge sur les 12 cœurs.
+jobs = 6
+
 [env]
 # whisper-rs-sys régénère ses bindings avec bindgen : libclang (LLVM) est requis sous Windows.
 # Installation : winget install LLVM.LLVM  (puis adapter le chemin ci-dessous si besoin).
 LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
+# Backend Vulkan de whisper.cpp : SDK LunarG (winget install KhronosGroup.VulkanSDK).
+# L'installateur définit aussi VULKAN_SDK au niveau système ; ce chemin sert aux shells
+# ouverts avant l'installation. Adapter la version si besoin.
+VULKAN_SDK = { value = "C:\\VulkanSDK\\1.4.363.0", force = false }
 # Les dossiers incrémentaux déclenchent "Accès refusé" sur cette machine.
 CARGO_INCREMENTAL = "0"

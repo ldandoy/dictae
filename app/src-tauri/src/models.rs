@@ -27,7 +27,7 @@ pub const MODELS: &[ModelInfo] = &[
         label: "Large v3 Turbo (q5_0)",
         file: "ggml-large-v3-turbo-q5_0.bin",
         bytes: 574_041_195,
-        note: "Meilleure qualité ; sur CPU ≈ 1,5× la durée de la dictée",
+        note: "Meilleure qualité ; recommandé avec GPU (≈ 0,25 s), sur CPU ≈ 1,5× la durée de la dictée",
     },
     ModelInfo {
         id: "medium-q5_0",
@@ -41,7 +41,7 @@ pub const MODELS: &[ModelInfo] = &[
         label: "Small (q5_1)",
         file: "ggml-small-q5_1.bin",
         bytes: 190_085_487,
-        note: "Recommandé sur CPU : ≈ 0,4× la durée de la dictée, bonne qualité",
+        note: "Recommandé sans GPU : ≈ 0,4× la durée de la dictée sur CPU, bonne qualité",
     },
     ModelInfo {
         id: "base-q5_1",
