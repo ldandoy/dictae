@@ -1,9 +1,8 @@
 # Construit l'installateur Windows et publie une Release GitHub (avec latest.json pour
 # les mises à jour automatiques) à chaque tag de version, par exemple `v0.1.0`.
 #
-# Secrets requis dans le dépôt :
-#   TAURI_SIGNING_PRIVATE_KEY           contenu du fichier ~/.tauri/dictae.key
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  mot de passe de la clé (vide si générée avec --ci)
+# Secret requis dans le dépôt :
+#   TAURI_SIGNING_PRIVATE_KEY   contenu du fichier ~/.tauri/dictae.key (clé sans mot de passe)
 
 name: Release
 
@@ -51,7 +50,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # La clé n'a pas de mot de passe : ne pas définir TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          # (une valeur, même un espace, ferait échouer le déchiffrement de la clé).
         with:
           projectPath: app
           tagName: ${{ github.ref_name }}

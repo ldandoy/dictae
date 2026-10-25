@@ -86,7 +86,7 @@ Secrets à créer une fois dans le dépôt (Settings › Secrets and variables �
 | Secret | Valeur |
 |---|---|
 | `TAURI_SIGNING_PRIVATE_KEY` | contenu de `~/.tauri/dictae.key` (clé privée de l'updater, jamais commitée) |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | vide (clé générée sans mot de passe) |
+
 
 La clé publique correspondante est dans `app/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) ;
 l'adresse du point de mise à jour (`plugins.updater.endpoints`) doit pointer vers le dépôt GitHub réel.
